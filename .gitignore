@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# System
+.DS_Store
+Thumbs.db
+
+# Audio outputs
+data/input_audio/*
+data/output_results/*
+!data/output_results/.gitkeep
+
+# Locally stored input files
+# Odkomentuj, jeżeli nie chcesz publikować plików audio:
+# data/input_audio/*
+
+# Model/cache directories
+.cache/
+
+*cli.txt
+.cache_huggingface/
+.whisper/
