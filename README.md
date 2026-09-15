@@ -341,6 +341,4 @@ Przykładowy kierunek dalszego rozwoju:
 - możliwość pomijania wybranych etapów potoku,
 - zapis czasu wykonania poszczególnych etapów.
 
-## Licencja
-
 
