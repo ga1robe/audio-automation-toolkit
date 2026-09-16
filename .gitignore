@@ -1,4 +1,5 @@
 # Python
+.Python
 __pycache__/
 *.py[cod]
 *.so
@@ -12,7 +13,9 @@ venv/
 env/
 
 # IDE
+.env
 .vscode/
+.vscode/*.local.json
 .idea/
 *.swp
 *.swo
@@ -24,6 +27,7 @@ Thumbs.db
 # Audio outputs
 data/input_audio/*
 data/output_results/*
+!data/input_audio/.gitkeep
 !data/output_results/.gitkeep
 
 # Locally stored input files

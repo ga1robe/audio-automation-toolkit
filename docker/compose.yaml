@@ -1,0 +1,42 @@
+services:
+  base:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        REQUIREMENTS_FILE: requirements/base.all.txt
+    container_name: audio-toolkit-base
+    working_dir: /workspace
+    volumes:
+      - ..:/workspace
+    environment:
+      PYTHONPATH: /workspace/src
+    command: sleep infinity
+
+  tf:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        REQUIREMENTS_FILE: requirements/tf.all.txt
+    container_name: audio-toolkit-tf
+    working_dir: /workspace
+    volumes:
+      - ..:/workspace
+    environment:
+      PYTHONPATH: /workspace/src
+    command: sleep infinity
+
+  asr:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        REQUIREMENTS_FILE: requirements/asr.all.txt
+    container_name: audio-toolkit-asr
+    working_dir: /workspace
+    volumes:
+      - ..:/workspace
+    environment:
+      PYTHONPATH: /workspace/src
+    command: sleep infinity
