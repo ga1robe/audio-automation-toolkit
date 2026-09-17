@@ -3,40 +3,46 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-      args:
-        REQUIREMENTS_FILE: requirements/base.all.txt
+      target: runtime
     container_name: audio-toolkit-base
     working_dir: /workspace
     volumes:
       - ..:/workspace
     environment:
       PYTHONPATH: /workspace/src
+      VENV_BASE: /opt/venv311-base
+      VENV_TF: /opt/venv311-tf
+      VENV_ASR: /opt/venv311-asr
     command: sleep infinity
 
   tf:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-      args:
-        REQUIREMENTS_FILE: requirements/tf.all.txt
+      target: runtime
     container_name: audio-toolkit-tf
     working_dir: /workspace
     volumes:
       - ..:/workspace
     environment:
       PYTHONPATH: /workspace/src
+      VENV_BASE: /opt/venv311-base
+      VENV_TF: /opt/venv311-tf
+      VENV_ASR: /opt/venv311-asr
     command: sleep infinity
 
   asr:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-      args:
-        REQUIREMENTS_FILE: requirements/asr.all.txt
+      target: runtime
     container_name: audio-toolkit-asr
     working_dir: /workspace
     volumes:
       - ..:/workspace
     environment:
       PYTHONPATH: /workspace/src
+      VENV_BASE: /opt/venv311-base
+      VENV_TF: /opt/venv311-tf
+      VENV_ASR: /opt/venv311-asr
     command: sleep infinity

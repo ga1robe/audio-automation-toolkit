@@ -7,6 +7,7 @@ Zarządza potokiem przetwarzania: Separacja -> Analiza -> Konwersja MIDI / ASR -
 import argparse
 import json
 import os
+import shlex
 import sys
 import shutil
 import subprocess
@@ -32,11 +33,20 @@ VENV_ASR = Path(
     os.environ.get("VENV_ASR", "/opt/venv311-asr")
 ) / "bin/python3.11"
 
-for venv_python in (VENV_BASE, VENV_TF, VENV_ASR):
-    if not venv_python.is_file():
-        raise RuntimeError(
-            f"Nie znaleziono interpretera środowiska wirtualnego: {venv_python}"
-        )
+def ensure_venv_interpreters() -> None:
+    for venv_python in (VENV_BASE, VENV_TF, VENV_ASR):
+        if not venv_python.is_file():
+            raise RuntimeError(
+                f"Nie znaleziono interpretera środowiska wirtualnego: {venv_python}"
+            )
+
+
+def log_command(stage: str, cmd: list[str], debug_stages: set[str] | None = None) -> None:
+    if debug_stages is None or stage not in debug_stages:
+        return
+    quoted_cmd = " ".join(shlex.quote(str(part)) for part in cmd)
+    print(f"[audio-toolkit][{stage}] running: {quoted_cmd}", flush=True)
+
 
 def run_process_pipeline(
     input_dir: Path,
@@ -44,7 +54,8 @@ def run_process_pipeline(
     stems_count: int = 5,
     asr_language: str = "en",
     asr_model: str = "small",
-    spectro_bool: bool = False
+    spectro_bool: bool = False,
+    debug_steps: set[str] | None = None
 ) -> dict:
     """Uruchamia pełny potok przetwarzania audio i zwraca usystematyzowany słownik wyników."""
     input_dir = input_dir.resolve()
@@ -123,6 +134,7 @@ def run_process_pipeline(
             "-o", str(stems_dir),
             str(audio_path)
         ]
+        log_command("base", cmd_spleeter, debug_steps)
         subprocess.run(cmd_spleeter, check=True)
         
         short_actual_stems_path_bool = True
@@ -150,6 +162,7 @@ def run_process_pipeline(
             "--output", str(analysis_json_path)
         ]
         try:
+            log_command("base", cmd_analysis, debug_steps)
             subprocess.run(cmd_analysis, check=True)
         except subprocess.CalledProcessError as exc:
             print(f"Analiza zakończyła się kodem: {exc.returncode}", file=sys.stderr)
@@ -187,6 +200,7 @@ def run_process_pipeline(
                     "--model", asr_model,
                     "--language", asr_language
                 ]
+                log_command("asr", cmd_asr, debug_steps)
                 subprocess.run(cmd_asr, check=True)
                 track_manifest["transcription"] = {
                     "txt": str(asr_dir / f"{stem_file.stem}.txt") if write_absolute_paths_bool else os.path.relpath(str(asr_dir / f"{stem_file.stem}.txt"), track_out_dir),
@@ -199,6 +213,7 @@ def run_process_pipeline(
                     str(VENV_TF), str(PROJECT_DIR / "src/modules/conversion_basicpitch.py"),
                     str(stem_file), str(out_midi)
                 ]
+                log_command("tf", cmd_bp, debug_steps)
                 subprocess.run(cmd_bp, check=True)
                 track_manifest["midi"][stem_type] = str(out_midi) if write_absolute_paths_bool else os.path.relpath(out_midi, track_out_dir)
             elif "drum" in stem_type:
@@ -209,6 +224,7 @@ def run_process_pipeline(
                     "--type", "drums", "--input", str(stem_file), "--output", str(out_midi),
                     "--tempo", str(detected_tempo)
                 ]
+                log_command("base", cmd_drums, debug_steps)
                 subprocess.run(cmd_drums, check=True)
                 track_manifest["midi"]["drums"] = str(out_midi) if write_absolute_paths_bool else os.path.relpath(out_midi, track_out_dir)
             elif "bass" in stem_type:
@@ -219,6 +235,7 @@ def run_process_pipeline(
                     "--type", "bass", "--input", str(stem_file), "--output", str(out_midi),
                     "--tempo", str(detected_tempo)
                 ]
+                log_command("base", cmd_bass, debug_steps)
                 subprocess.run(cmd_bass, check=True)
                 track_manifest["midi"]["bass"] = str(out_midi) if write_absolute_paths_bool else os.path.relpath(out_midi, track_out_dir)
             else:
@@ -228,6 +245,7 @@ def run_process_pipeline(
                     str(VENV_TF), str(PROJECT_DIR / "src/modules/conversion_basicpitch.py"),
                     str(stem_file), str(out_midi)
                 ]
+                log_command("tf", cmd_bp, debug_steps)
                 subprocess.run(cmd_bp, check=True)
                 track_manifest["midi"][stem_type] = str(out_midi) if write_absolute_paths_bool else os.path.relpath(out_midi, track_out_dir)
             if spectro_bool:
@@ -241,6 +259,7 @@ def run_process_pipeline(
                     "--input", stem_file,
                     "--output", out_spectro,
                 ]
+                log_command("base", cmd_spectro, debug_steps)
                 subprocess.run(cmd_spectro, check=True)
                 """
                 p = subprocess.Popen(cmd_spectro,
@@ -270,8 +289,26 @@ def main():
     parser.add_argument("--model", type=str, default="small", help="Model Whisper (domyślnie: small)")
     parser.add_argument("--json-out", type=Path, help="Ścieżka zapisu zbiorczego raportu JSON")
     parser.add_argument('--spectro','--spectrogram',action='store_true')
+    parser.add_argument(
+        "--debug-steps",
+        nargs="*",
+        choices=["base", "tf", "asr"],
+        help="Włącza logowanie komend dla wybranych etapów: base, tf, asr. Bez wartości włącza wszystkie etapy."
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_const",
+        const=["base", "tf", "asr"],
+        dest="debug_steps",
+        help="Skrót do --debug-steps base tf asr."
+    )
     
     args = parser.parse_args()
+    debug_steps = set(args.debug_steps) if args.debug_steps is not None else None
+    if debug_steps is not None and not debug_steps:
+        debug_steps = {"base", "tf", "asr"}
+
+    ensure_venv_interpreters()
     
     manifest = run_process_pipeline(
         input_dir=args.input,
@@ -279,7 +316,8 @@ def main():
         stems_count=args.stems,
         asr_language=args.lang,
         asr_model=args.model,
-        spectro_bool = args.spectro
+        spectro_bool=args.spectro,
+        debug_steps=debug_steps
     )
     
     json_output = json.dumps(manifest, ensure_ascii=False, indent=2)

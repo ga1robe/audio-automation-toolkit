@@ -96,6 +96,7 @@ docker run --rm -it \\
   /app/data/input\_audio \\
   /app/data/output\_results
 ```
+> Dla debugowania kolejności i logowania etapów `base -> tf -> asr` użyj opcji `--debug` lub `--debug-steps`; zobacz sekcję "Debugowanie etapów" poniżej.
 ### Domyślne ustawienia:
 
 - separacja na 5 stemów,
@@ -202,6 +203,50 @@ Domyślna wartość to:
 ```text
 5
 ```
+
+## Debugowanie etapów
+
+W trakcie rozwiązywania problemów warto włączyć logowanie komend uruchamianych w poszczególnych środowiskach. Domyślnie debug jest wyłączony, aby nie zatruwać standardowego działania aplikacji.
+
+### Flaga skrócona
+
+```/bin/bash
+docker run --rm -it \
+  -v "\$(pwd)/data:/app/data" \
+  audio-automation-toolkit \
+  /app/data/input\_audio \
+  /app/data/output\_results \
+  --debug
+```
+
+To jest alias do:
+```/bin/bash
+--debug-steps base tf asr
+```
+
+### Flaga szczegółowa
+
+```/bin/bash
+docker run --rm -it \
+  -v "\$(pwd)/data:/app/data" \
+  audio-automation-toolkit \
+  /app/data/input\_audio \
+  /app/data/output\_results \
+  --debug-steps base tf
+```
+
+lub tylko dla ASR:
+
+```/bin/bash
+docker run --rm -it \
+  -v "\$(pwd)/data:/app/data" \
+  audio-automation-toolkit \
+  /app/data/input\_audio \
+  /app/data/output\_results \
+  --debug-steps asr
+```
+
+Po użyciu tej flagi konsola pokaże dokładnie, który interpreter i który plik/skrypt są wywoływane w kolejności: `base -> tf -> asr`. Dzięki temu łatwiej zlokalizować etap, który powoduje błąd lub przeciążenie zasobów.
 
 ## Wyniki
 
