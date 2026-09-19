@@ -75,16 +75,81 @@ Przetwarzanie Basic Pitch, Whisper oraz separacja stemów mogą wymagać znaczny
 
 ## Budowanie obrazu Docker
 
+Projekt korzysta z budowy wielostopniowej. Główny obraz runtime jest budowany z osobnych stage'ów dla środowisk:
+
+- `base-builder` — zależności wspólne + Spleeter,
+- `tf-builder` — TensorFlow + Basic Pitch,
+- `asr-builder` — ASR + Whisper,
+- `runtime` — finalny obraz uruchomieniowy z wybranym trybem pracy.
+
 W katalogu głównym projektu wykonaj:
-```/bin/bash
-
-docker build -t audio-automation-toolkit .
+```bash
+docker build --target runtime -t audio-toolkit:latest .
 ```
-Można sprawdzić, czy obraz został utworzony:
-```/bin/bash
 
-docker images audio-automation-toolkit
+Można też zbudować osobne obrazy builderów, jeżeli potrzebne są tylko narzędzia z konkretnego środowiska:
+```bash
+docker build --target base-builder -t audio-toolkit-base .
+docker build --target tf-builder -t audio-toolkit-tf .
+docker build --target asr-builder -t audio-toolkit-asr .
 ```
+
+Sprawdzenie gotowych obrazów:
+```bash
+docker images | grep audio-toolkit
+```
+
+> Weryfikacja w tym środowisku: próba budowy finalnego obrazu zakończyła się błędem zewnętrznym `TLS handshake timeout` podczas pobierania obrazu bazowego z Docker Hub, więc problem nie wynika z samego Dockerfile, tylko z połączeniem sieciowym do rejestru. Komendy powyżej są poprawnym sposobem budowy i powinny działać w środowisku z dostępem do Docker Hub.
+
+## Uruchamianie obrazu runtime z wybranym etapem
+
+Główny obraz runtime akceptuje parametr `--stage`:
+
+- `base` — separacja stemów, analiza audio, heurystyki, spektrogramy,
+- `tf` — Basic Pitch / konwersja do MIDI na bazie TensorFlow,
+- `asr` — transkrypcja ASR/Whisper,
+- `full` — pełny potok (domyślnie).
+
+Przykład uruchomienia pełnego potoku:
+```bash
+docker run --rm -it \
+  -v "$(pwd)/data:/app/data" \
+  audio-toolkit:latest \
+  --stage full \
+  /app/data/input_audio \
+  /app/data/output_results
+```
+
+Przykład tylko dla etapu bazowego:
+```bash
+docker run --rm -it \
+  -v "$(pwd)/data:/app/data" \
+  audio-toolkit:latest \
+  --stage base \
+  /app/data/input_audio \
+  /app/data/output_results
+```
+
+Przykład tylko dla TensorFlow:
+```bash
+docker run --rm -it \
+  -v "$(pwd)/data:/app/data" \
+  audio-toolkit:latest \
+  --stage tf \
+  /app/data/input_audio \
+  /app/data/output_results
+```
+
+Przykład tylko dla ASR:
+```bash
+docker run --rm -it \
+  -v "$(pwd)/data:/app/data" \
+  audio-toolkit:latest \
+  --stage asr \
+  /app/data/input_audio \
+  /app/data/output_results
+```
+
 ## Podstawowe uruchomienie
 
 Katalogi data/input_audio oraz data/output_results są mapowane do kontenera jako /app/data.

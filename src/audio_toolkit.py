@@ -33,8 +33,15 @@ VENV_ASR = Path(
     os.environ.get("VENV_ASR", "/opt/venv311-asr")
 ) / "bin/python3.11"
 
-def ensure_venv_interpreters() -> None:
-    for venv_python in (VENV_BASE, VENV_TF, VENV_ASR):
+def ensure_venv_interpreters(stage: str = "full") -> None:
+    required = {
+        "base": (VENV_BASE,),
+        "tf": (VENV_TF,),
+        "asr": (VENV_ASR,),
+        "full": (VENV_BASE, VENV_TF, VENV_ASR),
+    }
+
+    for venv_python in required.get(stage, required["full"]):
         if not venv_python.is_file():
             raise RuntimeError(
                 f"Nie znaleziono interpretera środowiska wirtualnego: {venv_python}"
@@ -55,9 +62,10 @@ def run_process_pipeline(
     asr_language: str = "en",
     asr_model: str = "small",
     spectro_bool: bool = False,
-    debug_steps: set[str] | None = None
+    debug_steps: set[str] | None = None,
+    stage: str = "full",
 ) -> dict:
-    """Uruchamia pełny potok przetwarzania audio i zwraca usystematyzowany słownik wyników."""
+    """Uruchamia potok przetwarzania audio dla wybranego etapu lub pełnej konfiguracji."""
     input_dir = input_dir.resolve()
     output_dir = output_dir.resolve()
     
@@ -102,6 +110,7 @@ def run_process_pipeline(
         "toolkit_version": "1.0.0",
         "input_dir": str(input_dir),
         "output_dir": str(output_dir),
+        "pipeline_stage": stage,
         "input_files": [p.name for p in audio_files],
         "processed_files_count": len(audio_files),
         "results": []
@@ -125,74 +134,80 @@ def run_process_pipeline(
             "transcription": None,
             "spectrograms": {} if spectro_bool else None
         }
-        
-        # 1. Separacja Spleeter
-        spleeter_bin = VENV_BASE.parent / "spleeter"
-        cmd_spleeter = [
-            str(spleeter_bin), "separate",
-            "-p", f"spleeter:{stems_count}stems",
-            "-o", str(stems_dir),
-            str(audio_path)
-        ]
-        log_command("base", cmd_spleeter, debug_steps)
-        subprocess.run(cmd_spleeter, check=True)
-        
-        short_actual_stems_path_bool = True
-        actual_stems_path = stems_dir / track_name
-        if short_actual_stems_path_bool:
-            shutil.copytree(str(stems_dir / track_name),str(stems_dir), dirs_exist_ok=True)
-            shutil.rmtree(str(stems_dir / track_name), ignore_errors=False)
+
+        if stage in {"full", "base"}:
+            # 1. Separacja Spleeter
+            spleeter_bin = VENV_BASE.parent / "spleeter"
+            cmd_spleeter = [
+                str(spleeter_bin), "separate",
+                "-p", f"spleeter:{stems_count}stems",
+                "-o", str(stems_dir),
+                str(audio_path)
+            ]
+            log_command("base", cmd_spleeter, debug_steps)
+            subprocess.run(cmd_spleeter, check=True)
+
+            short_actual_stems_path_bool = True
             actual_stems_path = stems_dir / track_name
-            if not actual_stems_path.exists():
-                actual_stems_path = stems_dir
-        
-        if not actual_stems_path.is_dir():
-            raise RuntimeError(
-                f"Spleeter nie utworzył oczekiwanego katalogu stemów: "
-                f"{actual_stems_path}"
-            )
-            
+            if short_actual_stems_path_bool:
+                shutil.copytree(str(stems_dir / track_name),str(stems_dir), dirs_exist_ok=True)
+                shutil.rmtree(str(stems_dir / track_name), ignore_errors=False)
+                actual_stems_path = stems_dir / track_name
+                if not actual_stems_path.exists():
+                    actual_stems_path = stems_dir
+
+            if not actual_stems_path.is_dir():
+                raise RuntimeError(
+                    f"Spleeter nie utworzył oczekiwanego katalogu stemów: "
+                    f"{actual_stems_path}"
+                )
+        else:
+            actual_stems_path = input_dir
+
         track_out_dir.mkdir(parents=True, exist_ok=True)
-        
-        # 2. Analiza Audio (BPM, Key, Tonality)
-        analysis_json_path = track_out_dir / "analysis.json"
-        cmd_analysis = [
-            str(VENV_BASE), str(PROJECT_DIR / "src/modules/analysis.py"),
-            str(audio_path),
-            "--output", str(analysis_json_path)
-        ]
-        try:
-            log_command("base", cmd_analysis, debug_steps)
-            subprocess.run(cmd_analysis, check=True)
-        except subprocess.CalledProcessError as exc:
-            print(f"Analiza zakończyła się kodem: {exc.returncode}", file=sys.stderr)
-            print(f"Polecenie: {exc.cmd}", file=sys.stderr)
-            
-        if analysis_json_path.exists():
-            with open(analysis_json_path, "r", encoding="utf-8") as jf:
-                track_manifest["analysis"] = json.load(jf)
-                
-        """
-        determining whether 'track_manifest["analysis"]' is a list or a dictionary
-        Next, check whether the ‘tempo’ parameter exists and get it to 'detected_tempo'
-        """
-        detected_tempo = 120.0
-        analysis = track_manifest["analysis"]
-        if isinstance(analysis, dict):
-            detected_tempo = float(analysis.get("tempo", 120.0))
-        elif isinstance(analysis, list):
-            for item in analysis:
-                if isinstance(item, dict) and "tempo" in item:
-                    detected_tempo = float(item["tempo"])
-                    break
-                    
+
+        if stage in {"full", "base"}:
+            # 2. Analiza Audio (BPM, Key, Tonality)
+            analysis_json_path = track_out_dir / "analysis.json"
+            cmd_analysis = [
+                str(VENV_BASE), str(PROJECT_DIR / "src/modules/analysis.py"),
+                str(audio_path),
+                "--output", str(analysis_json_path)
+            ]
+            try:
+                log_command("base", cmd_analysis, debug_steps)
+                subprocess.run(cmd_analysis, check=True)
+            except subprocess.CalledProcessError as exc:
+                print(f"Analiza zakończyła się kodem: {exc.returncode}", file=sys.stderr)
+                print(f"Polecenie: {exc.cmd}", file=sys.stderr)
+
+            if analysis_json_path.exists():
+                with open(analysis_json_path, "r", encoding="utf-8") as jf:
+                    track_manifest["analysis"] = json.load(jf)
+
+            """
+            determining whether 'track_manifest["analysis"]' is a list or a dictionary
+            Next, check whether the ‘tempo’ parameter exists and get it to 'detected_tempo'
+            """
+            detected_tempo = 120.0
+            analysis = track_manifest["analysis"]
+            if isinstance(analysis, dict):
+                detected_tempo = float(analysis.get("tempo", 120.0))
+            elif isinstance(analysis, list):
+                for item in analysis:
+                    if isinstance(item, dict) and "tempo" in item:
+                        detected_tempo = float(item["tempo"])
+                        break
+        else:
+            detected_tempo = 120.0
+
         # 3. Przetwarzanie Poszczególnych Ścieżek (MIDI / ASR / Heurystyka)
         midi_dir.mkdir(parents=True, exist_ok=True)
         for stem_file in actual_stems_path.glob("*.wav"):
             stem_type = stem_file.stem.lower()
             track_manifest["stems"][stem_type] = str(stem_file) if write_absolute_paths_bool else os.path.relpath(stem_file, track_out_dir)
-            
-            if stem_type in ["vocals", "vocal"]:
+
+            if stem_type in ["vocals", "vocal"] and stage in {"full", "asr"}:
                 # Whisper ASR
                 cmd_asr = [
                     str(VENV_ASR), str(PROJECT_DIR / "src/modules/transcription.py"),
@@ -207,6 +222,8 @@ def run_process_pipeline(
                     "json": str(asr_dir / f"{stem_file.stem}.json") if write_absolute_paths_bool else os.path.relpath(str(asr_dir / f"{stem_file.stem}.json"), track_out_dir),
                     "srt": str(asr_dir / f"{stem_file.stem}.srt") if write_absolute_paths_bool else os.path.relpath(str(asr_dir / f"{stem_file.stem}.srt"), track_out_dir)
                 }
+
+            if stem_type in ["vocals", "vocal"] and stage in {"full", "tf"}:
                 # Basic Pitch (Melodia / Inne)
                 out_midi = midi_dir / f"{track_name}-{stem_type}.mid"
                 cmd_bp = [
@@ -216,7 +233,7 @@ def run_process_pipeline(
                 log_command("tf", cmd_bp, debug_steps)
                 subprocess.run(cmd_bp, check=True)
                 track_manifest["midi"][stem_type] = str(out_midi) if write_absolute_paths_bool else os.path.relpath(out_midi, track_out_dir)
-            elif "drum" in stem_type:
+            elif "drum" in stem_type and stage in {"full", "base"}:
                 # Heurystyka perkusyjna
                 out_midi = midi_dir / f"{track_name}-drums.mid"
                 cmd_drums = [
@@ -227,7 +244,7 @@ def run_process_pipeline(
                 log_command("base", cmd_drums, debug_steps)
                 subprocess.run(cmd_drums, check=True)
                 track_manifest["midi"]["drums"] = str(out_midi) if write_absolute_paths_bool else os.path.relpath(out_midi, track_out_dir)
-            elif "bass" in stem_type:
+            elif "bass" in stem_type and stage in {"full", "base"}:
                 # Heurystyka basowa
                 out_midi = midi_dir / f"{track_name}-bass.mid"
                 cmd_bass = [
@@ -238,7 +255,7 @@ def run_process_pipeline(
                 log_command("base", cmd_bass, debug_steps)
                 subprocess.run(cmd_bass, check=True)
                 track_manifest["midi"]["bass"] = str(out_midi) if write_absolute_paths_bool else os.path.relpath(out_midi, track_out_dir)
-            else:
+            elif stage in {"full", "tf"}:
                 # Basic Pitch (Melodia / Inne)
                 out_midi = midi_dir / f"{track_name}-{stem_type}.mid"
                 cmd_bp = [
@@ -248,12 +265,10 @@ def run_process_pipeline(
                 log_command("tf", cmd_bp, debug_steps)
                 subprocess.run(cmd_bp, check=True)
                 track_manifest["midi"][stem_type] = str(out_midi) if write_absolute_paths_bool else os.path.relpath(out_midi, track_out_dir)
-            if spectro_bool:
+
+            if spectro_bool and stage in {"full", "base"}:
                 spectro_dir.mkdir(parents=True, exist_ok=True)
                 out_spectro = spectro_dir.joinpath(f"spectrogram.{stem_type}.png")
-                #print("[check]spectro_bool:",spectro_bool,"[in]",stem_file,"[out]",out_spectro)
-                # Spectrogram of stem (BPM, Key, Tonality)
-                # wav_path: Path, out_dir: Path, stems_name: str
                 cmd_spectro = [
                     str(VENV_BASE), str(PROJECT_DIR / "src/modules/spectrogram.py"),
                     "--input", stem_file,
@@ -261,20 +276,9 @@ def run_process_pipeline(
                 ]
                 log_command("base", cmd_spectro, debug_steps)
                 subprocess.run(cmd_spectro, check=True)
-                """
-                p = subprocess.Popen(cmd_spectro,
-                     #shell=True,
-                     bufsize=64,
-                     stdin=subprocess.PIPE,
-                     stderr=subprocess.PIPE,
-                     stdout=subprocess.PIPE)
-                for line in p.stdout:
-                    print(line.rstrip())
-                    p.stdout.flush()
-                """
                 track_manifest["spectrograms"][stem_type] = str(out_spectro) if write_absolute_paths_bool else os.path.relpath(out_spectro, track_out_dir)
         execution_manifest["results"].append(track_manifest)
-        
+
     return execution_manifest
 
 def main():
@@ -284,6 +288,12 @@ def main():
     )
     parser.add_argument("input", type=Path, help="Katalog wejściowy z plikami audio")
     parser.add_argument("output", type=Path, help="Katalog wyjściowy na pliki MIDI, JSON, ASR")
+    parser.add_argument(
+        "--stage",
+        choices=["base", "tf", "asr", "full"],
+        default="full",
+        help="Wybiera, który etap ma zostać uruchomiony: base, tf, asr lub full."
+    )
     parser.add_argument("--stems", type=int, default=5, choices=[2, 4, 5], help="Liczba stemów Spleeter (domyślnie: 5)")
     parser.add_argument("--lang", type=str, default="en", help="Język transkrypcji ASR (domyślnie: en)")
     parser.add_argument("--model", type=str, default="small", help="Model Whisper (domyślnie: small)")
@@ -308,8 +318,8 @@ def main():
     if debug_steps is not None and not debug_steps:
         debug_steps = {"base", "tf", "asr"}
 
-    ensure_venv_interpreters()
-    
+    ensure_venv_interpreters(stage=args.stage)
+
     manifest = run_process_pipeline(
         input_dir=args.input,
         output_dir=args.output,
@@ -317,7 +327,8 @@ def main():
         asr_language=args.lang,
         asr_model=args.model,
         spectro_bool=args.spectro,
-        debug_steps=debug_steps
+        debug_steps=debug_steps,
+        stage=args.stage,
     )
     
     json_output = json.dumps(manifest, ensure_ascii=False, indent=2)
