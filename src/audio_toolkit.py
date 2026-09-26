@@ -8,6 +8,7 @@ import argparse
 import json
 import os
 import shlex
+import signal
 import sys
 import shutil
 import subprocess
@@ -53,6 +54,57 @@ def log_command(stage: str, cmd: list[str], debug_stages: set[str] | None = None
         return
     quoted_cmd = " ".join(shlex.quote(str(part)) for part in cmd)
     print(f"[audio-toolkit][{stage}] running: {quoted_cmd}", flush=True)
+
+
+def choose_recovery_stems(stems_count: int) -> int | None:
+    if stems_count in {5, 4}:
+        return 2
+    return None
+
+
+def is_kernel_kill_exit(returncode: int) -> bool:
+    return returncode in (-signal.SIGKILL, signal.SIGKILL, 137, -137) or abs(returncode) == signal.SIGKILL
+
+
+def run_spleeter_with_fallback(audio_path: Path, stems_dir: Path, stems_count: int, debug_steps: set[str] | None = None) -> int:
+    candidate_counts = [stems_count]
+    fallback = choose_recovery_stems(stems_count)
+    if fallback is not None:
+        candidate_counts.append(fallback)
+
+    last_exc: subprocess.CalledProcessError | None = None
+    for attempt in candidate_counts:
+        cmd = [
+            str(VENV_BASE.parent / "spleeter"), "separate",
+            "-p", f"spleeter:{attempt}stems",
+            "-o", str(stems_dir),
+            str(audio_path),
+        ]
+        log_command("base", cmd, debug_steps)
+        try:
+            subprocess.run(cmd, check=True)
+            return attempt
+        except subprocess.CalledProcessError as exc:
+            last_exc = exc
+            if not is_kernel_kill_exit(exc.returncode):
+                raise
+            if attempt == 2:
+                break
+            print(
+                f"[audio-toolkit][base] Spleeter was killed by the OS (likely OOM) while using {attempt} stems. Retrying with 2 stems.",
+                file=sys.stderr,
+                flush=True,
+            )
+
+    if last_exc is not None:
+        raise RuntimeError(
+            f"Spleeter was terminated by the OS while processing {audio_path}. "
+            "This commonly means the Docker container is memory-constrained. "
+            f"Requested stems: {stems_count}. The toolkit automatically retried with 2 stems, but the process still failed. "
+            "Try a shorter audio file, reduce input length, or run the container with more RAM."
+        ) from last_exc
+
+    raise RuntimeError(f"Spleeter failed for {audio_path} without producing a valid result.")
 
 
 def run_process_pipeline(
@@ -137,15 +189,8 @@ def run_process_pipeline(
 
         if stage in {"full", "base"}:
             # 1. Separacja Spleeter
-            spleeter_bin = VENV_BASE.parent / "spleeter"
-            cmd_spleeter = [
-                str(spleeter_bin), "separate",
-                "-p", f"spleeter:{stems_count}stems",
-                "-o", str(stems_dir),
-                str(audio_path)
-            ]
-            log_command("base", cmd_spleeter, debug_steps)
-            subprocess.run(cmd_spleeter, check=True)
+            actual_stems_count = run_spleeter_with_fallback(audio_path, stems_dir, stems_count, debug_steps)
+            stems_count = actual_stems_count
 
             short_actual_stems_path_bool = True
             actual_stems_path = stems_dir / track_name
@@ -225,7 +270,7 @@ def run_process_pipeline(
 
             if stem_type in ["vocals", "vocal"] and stage in {"full", "tf"}:
                 # Basic Pitch (Melodia / Inne)
-                out_midi = midi_dir / f"{track_name}-{stem_type}.mid"
+                out_midi = midi_dir / f"{stem_type}.mid"
                 cmd_bp = [
                     str(VENV_TF), str(PROJECT_DIR / "src/modules/conversion_basicpitch.py"),
                     str(stem_file), str(out_midi)
@@ -235,7 +280,7 @@ def run_process_pipeline(
                 track_manifest["midi"][stem_type] = str(out_midi) if write_absolute_paths_bool else os.path.relpath(out_midi, track_out_dir)
             elif "drum" in stem_type and stage in {"full", "base"}:
                 # Heurystyka perkusyjna
-                out_midi = midi_dir / f"{track_name}-drums.mid"
+                out_midi = midi_dir / f"drums.mid"
                 cmd_drums = [
                     str(VENV_BASE), str(PROJECT_DIR / "src/modules/heuristics.py"),
                     "--type", "drums", "--input", str(stem_file), "--output", str(out_midi),
@@ -246,7 +291,7 @@ def run_process_pipeline(
                 track_manifest["midi"]["drums"] = str(out_midi) if write_absolute_paths_bool else os.path.relpath(out_midi, track_out_dir)
             elif "bass" in stem_type and stage in {"full", "base"}:
                 # Heurystyka basowa
-                out_midi = midi_dir / f"{track_name}-bass.mid"
+                out_midi = midi_dir / f"bass.mid"
                 cmd_bass = [
                     str(VENV_BASE), str(PROJECT_DIR / "src/modules/heuristics.py"),
                     "--type", "bass", "--input", str(stem_file), "--output", str(out_midi),
@@ -257,7 +302,7 @@ def run_process_pipeline(
                 track_manifest["midi"]["bass"] = str(out_midi) if write_absolute_paths_bool else os.path.relpath(out_midi, track_out_dir)
             elif stage in {"full", "tf"}:
                 # Basic Pitch (Melodia / Inne)
-                out_midi = midi_dir / f"{track_name}-{stem_type}.mid"
+                out_midi = midi_dir / f"{stem_type}.mid"
                 cmd_bp = [
                     str(VENV_TF), str(PROJECT_DIR / "src/modules/conversion_basicpitch.py"),
                     str(stem_file), str(out_midi)
