@@ -62,6 +62,28 @@ def choose_recovery_stems(stems_count: int) -> int | None:
     return None
 
 
+def normalize_asr_language(language: str | None) -> str:
+    if language is None:
+        return "en"
+
+    normalized = str(language).strip().lower().replace("_", "-")
+    if not normalized:
+        return "en"
+
+    locale = normalized.split("-", 1)[0]
+    aliases = {
+        "us": "en",
+        "usa": "en",
+        "en": "en",
+        "english": "en",
+        "gb": "en",
+        "uk": "en",
+        "ca": "en",
+        "au": "en",
+    }
+    return aliases.get(locale, normalized)
+
+
 def is_kernel_kill_exit(returncode: int) -> bool:
     return returncode in (-signal.SIGKILL, signal.SIGKILL, 137, -137) or abs(returncode) == signal.SIGKILL
 
@@ -158,6 +180,8 @@ def run_process_pipeline(
             f"Znalezione elementy: {[p.name for p in input_dir.iterdir()]}"
         )
     
+    normalized_lang = normalize_asr_language(asr_language)
+
     execution_manifest = {
         "toolkit_version": "1.0.0",
         "input_dir": str(input_dir),
@@ -165,7 +189,8 @@ def run_process_pipeline(
         "pipeline_stage": stage,
         "input_files": [p.name for p in audio_files],
         "processed_files_count": len(audio_files),
-        "results": []
+        "results": [],
+        "asr_language": normalized_lang,
     }
     
     write_absolute_paths_bool = False
@@ -258,7 +283,7 @@ def run_process_pipeline(
                     str(VENV_ASR), str(PROJECT_DIR / "src/modules/transcription.py"),
                     str(stem_file), str(asr_dir),
                     "--model", asr_model,
-                    "--language", asr_language
+                    "--language", normalized_lang,
                 ]
                 log_command("asr", cmd_asr, debug_steps)
                 subprocess.run(cmd_asr, check=True)

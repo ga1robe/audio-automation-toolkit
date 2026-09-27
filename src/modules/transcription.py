@@ -9,6 +9,29 @@ from pathlib import Path
 
 import whisper
 
+
+def normalize_language(language: str | None) -> str:
+    if language is None:
+        return "en"
+
+    normalized = str(language).strip().lower().replace("_", "-")
+    if not normalized:
+        return "en"
+
+    locale = normalized.split("-", 1)[0]
+    aliases = {
+        "us": "en",
+        "usa": "en",
+        "en": "en",
+        "english": "en",
+        "gb": "en",
+        "uk": "en",
+        "ca": "en",
+        "au": "en",
+    }
+    return aliases.get(locale, normalized)
+
+
 def format_srt_time(seconds: float) -> str:
     milliseconds = int(round(seconds * 1000))
     
@@ -75,7 +98,8 @@ def main() -> int:
     )
     
     args = parser.parse_args()
-    
+    args.language = normalize_language(args.language)
+
     input_audio = args.input_audio.resolve()
     output_dir = args.output_dir.resolve()
     
