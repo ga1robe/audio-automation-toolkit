@@ -34,7 +34,7 @@ VENV_ASR = Path(
     os.environ.get("VENV_ASR", "/opt/venv311-asr")
 ) / "bin/python3.11"
 
-def ensure_venv_interpreters(stage: str = "full") -> None:
+def ensure_venv_interpreters(stage: str = "full", skip_asr: bool = False) -> None:
     required = {
         "base": (VENV_BASE,),
         "tf": (VENV_TF,),
@@ -42,7 +42,11 @@ def ensure_venv_interpreters(stage: str = "full") -> None:
         "full": (VENV_BASE, VENV_TF, VENV_ASR),
     }
 
-    for venv_python in required.get(stage, required["full"]):
+    interpreters = required.get(stage, required["full"])
+    if skip_asr:
+        interpreters = tuple(python for python in interpreters if python != VENV_ASR)
+
+    for venv_python in interpreters:
         if not venv_python.is_file():
             raise RuntimeError(
                 f"Nie znaleziono interpretera środowiska wirtualnego: {venv_python}"
@@ -62,13 +66,13 @@ def choose_recovery_stems(stems_count: int) -> int | None:
     return None
 
 
-def normalize_asr_language(language: str | None) -> str:
+def normalize_asr_language(language: str | None) -> str | None:
     if language is None:
-        return "en"
+        return None
 
     normalized = str(language).strip().lower().replace("_", "-")
-    if not normalized:
-        return "en"
+    if not normalized or normalized in {"none", "auto"}:
+        return None
 
     locale = normalized.split("-", 1)[0]
     aliases = {
@@ -138,6 +142,7 @@ def run_process_pipeline(
     spectro_bool: bool = False,
     debug_steps: set[str] | None = None,
     stage: str = "full",
+    skip_asr: bool = False,
 ) -> dict:
     """Uruchamia potok przetwarzania audio dla wybranego etapu lub pełnej konfiguracji."""
     input_dir = input_dir.resolve()
@@ -277,13 +282,13 @@ def run_process_pipeline(
             stem_type = stem_file.stem.lower()
             track_manifest["stems"][stem_type] = str(stem_file) if write_absolute_paths_bool else os.path.relpath(stem_file, track_out_dir)
 
-            if stem_type in ["vocals", "vocal"] and stage in {"full", "asr"}:
+            if stem_type in ["vocals", "vocal"] and stage in {"full", "asr"} and not skip_asr:
                 # Whisper ASR
                 cmd_asr = [
                     str(VENV_ASR), str(PROJECT_DIR / "src/modules/transcription.py"),
                     str(stem_file), str(asr_dir),
                     "--model", asr_model,
-                    "--language", normalized_lang,
+                    "--language", normalized_lang or "None",
                 ]
                 log_command("asr", cmd_asr, debug_steps)
                 subprocess.run(cmd_asr, check=True)
@@ -366,6 +371,12 @@ def main():
     )
     parser.add_argument("--stems", type=int, default=5, choices=[2, 4, 5], help="Liczba stemów Spleeter (domyślnie: 5)")
     parser.add_argument("--lang", type=str, default="en", help="Język transkrypcji ASR (domyślnie: en)")
+    parser.add_argument(
+        "--no-asr", "--no-whisper", "--no-whisper-ai",
+        action="store_true",
+        dest="skip_asr",
+        help="Pomija transkrypcję ASR/Whisper.",
+    )
     parser.add_argument("--model", type=str, default="small", help="Model Whisper (domyślnie: small)")
     parser.add_argument("--json-out", type=Path, help="Ścieżka zapisu zbiorczego raportu JSON")
     parser.add_argument('--spectro','--spectrogram',action='store_true')
@@ -388,7 +399,7 @@ def main():
     if debug_steps is not None and not debug_steps:
         debug_steps = {"base", "tf", "asr"}
 
-    ensure_venv_interpreters(stage=args.stage)
+    ensure_venv_interpreters(stage=args.stage, skip_asr=args.skip_asr)
 
     manifest = run_process_pipeline(
         input_dir=args.input,
@@ -399,6 +410,7 @@ def main():
         spectro_bool=args.spectro,
         debug_steps=debug_steps,
         stage=args.stage,
+        skip_asr=args.skip_asr,
     )
     
     json_output = json.dumps(manifest, ensure_ascii=False, indent=2)
