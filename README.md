@@ -169,6 +169,8 @@ docker run --rm -it \\
 - model ASR: small,
 - spektrogramy: wyłączone.
 
+`--lang None` (lub `--lang auto`) pozwala Whisperowi automatycznie wykryć język. Aby pominąć transkrypcję w pełnym potoku, użyj `--no-asr`; `--no-whisper` i `--no-whisper-ai` są aliasami tej opcji.
+
 ## Uruchomienie z raportem JSON
 
 Aby zapisać zbiorczy raport do pliku:
