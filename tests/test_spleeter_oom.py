@@ -16,3 +16,8 @@ def test_normalize_asr_language_supports_us_alias():
     assert audio_toolkit.normalize_asr_language("us") == "en"
     assert audio_toolkit.normalize_asr_language("en-US") == "en"
     assert audio_toolkit.normalize_asr_language("pl") == "pl"
+
+
+def test_normalize_asr_language_supports_automatic_detection():
+    assert audio_toolkit.normalize_asr_language("None") is None
+    assert audio_toolkit.normalize_asr_language("auto") is None
