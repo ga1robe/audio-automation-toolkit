@@ -383,16 +383,17 @@ docker run --rm -it audio-automation-toolkit --help
 Dla każdego pliku audio wykonywane są następujące kroki:
 
 1. Wyszukanie obsługiwanych plików audio.
-2. Separacja źródła na stemów przy użyciu Spleeter.
-3. Analiza tempa, tonacji i tonalności.
-4. Wykrycie ścieżki wokalnej.
-5. Transkrypcja wokalu z użyciem ASR.
-6. Konwersja ścieżki wokalnej do MIDI.
-7. Heurystyczna konwersja perkusji do MIDI.
-8. Heurystyczna konwersja basu do MIDI.
-9. Konwersja pozostałych stemów do MIDI.
-10. Opcjonalne wygenerowanie spektrogramów.
-11. Zapis raportu JSON.
+2. Podział źródła na maksymalnie pięciominutowe fragmenty i osobna separacja każdego z nich przez Spleeter.
+3. Połączenie fragmentów każdego stemu w jeden plik WAV, bez wczytywania całego wyniku do pamięci.
+4. Analiza tempa, tonacji i tonalności.
+5. Wykrycie ścieżki wokalnej.
+6. Transkrypcja wokalu z użyciem ASR.
+7. Konwersja ścieżki wokalnej do MIDI.
+8. Heurystyczna konwersja perkusji do MIDI.
+9. Heurystyczna konwersja basu do MIDI.
+10. Konwersja pozostałych stemów do MIDI.
+11. Opcjonalne wygenerowanie spektrogramów.
+12. Zapis raportu JSON.
 
 ## Środowiska Python
 
@@ -452,5 +453,4 @@ Przykładowy kierunek dalszego rozwoju:
 - walidacja wygenerowanych plików MIDI,
 - możliwość pomijania wybranych etapów potoku,
 - zapis czasu wykonania poszczególnych etapów.
-
 
