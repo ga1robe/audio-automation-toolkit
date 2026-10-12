@@ -12,10 +12,13 @@ import signal
 import sys
 import shutil
 import subprocess
+import tempfile
+import wave
 from pathlib import Path
 
 # Definicje ścieżek środowisk wirtualnych wewnątrz kontenera
 PROJECT_DIR = Path(__file__).resolve().parent.parent
+SPLEETER_CHUNK_DURATION_MS = 5 * 60 * 1000
 """
 VENV_BASE = Path.home().joinpath('opt', 'venv311-base', 'bin', 'python3.11') if Path.home().joinpath('opt', 'venv311-base', 'bin', 'python3.11').exists() else Path("/opt/venv311-base/bin/python3.11")
 VENV_TF = Path.home().joinpath('opt', 'venv311-tf', 'bin', 'python3.11') if Path.home().joinpath('opt', 'venv311-tf', 'bin', 'python3.11').exists() else Path("opt/venv311-tf/bin/python3.11")
@@ -92,6 +95,66 @@ def is_kernel_kill_exit(returncode: int) -> bool:
     return returncode in (-signal.SIGKILL, signal.SIGKILL, 137, -137) or abs(returncode) == signal.SIGKILL
 
 
+def split_audio_into_chunks(audio_path: Path, chunks_dir: Path) -> list[Path]:
+    from pydub import AudioSegment
+
+    chunks_dir.mkdir(parents=True, exist_ok=True)
+    chunks = []
+    start_ms = 0
+
+    while True:
+        segment = AudioSegment.from_file(
+            str(audio_path),
+            start_second=start_ms / 1000,
+            duration=SPLEETER_CHUNK_DURATION_MS / 1000,
+        )
+        segment_duration_ms = len(segment)
+        if segment_duration_ms == 0:
+            break
+
+        chunk_path = chunks_dir / f"chunk_{len(chunks):06d}.wav"
+        segment.export(chunk_path, format="wav")
+        del segment
+        chunks.append(chunk_path)
+
+        if segment_duration_ms < SPLEETER_CHUNK_DURATION_MS:
+            break
+        start_ms += SPLEETER_CHUNK_DURATION_MS
+
+    if not chunks:
+        raise RuntimeError(f"Nie udało się odczytać audio z pliku: {audio_path}")
+
+    return chunks
+
+
+def combine_spleeter_stems(
+    chunk_stem_paths: list[Path],
+    output_path: Path,
+) -> None:
+    with wave.open(str(chunk_stem_paths[0]), "rb") as first_chunk:
+        first_params = first_chunk.getparams()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with wave.open(str(output_path), "wb") as combined:
+            combined.setparams(first_params)
+            for chunk_stem_path in chunk_stem_paths:
+                with wave.open(str(chunk_stem_path), "rb") as chunk:
+                    params = chunk.getparams()
+                    if (
+                        params.nchannels != first_params.nchannels
+                        or params.sampwidth != first_params.sampwidth
+                        or params.framerate != first_params.framerate
+                        or params.comptype != first_params.comptype
+                        or params.compname != first_params.compname
+                    ):
+                        raise RuntimeError(
+                            f"Niezgodny format ścieżki Spleeter: {chunk_stem_path}"
+                        )
+
+                    while frames := chunk.readframes(65536):
+                        combined.writeframesraw(frames)
+
+
 def run_spleeter_with_fallback(audio_path: Path, stems_dir: Path, stems_count: int, debug_steps: set[str] | None = None) -> int:
     candidate_counts = [stems_count]
     fallback = choose_recovery_stems(stems_count)
@@ -99,28 +162,79 @@ def run_spleeter_with_fallback(audio_path: Path, stems_dir: Path, stems_count: i
         candidate_counts.append(fallback)
 
     last_exc: subprocess.CalledProcessError | None = None
-    for attempt in candidate_counts:
-        cmd = [
-            str(VENV_BASE.parent / "spleeter"), "separate",
-            "-p", f"spleeter:{attempt}stems",
-            "-o", str(stems_dir),
-            str(audio_path),
-        ]
-        log_command("base", cmd, debug_steps)
-        try:
-            subprocess.run(cmd, check=True)
-            return attempt
-        except subprocess.CalledProcessError as exc:
-            last_exc = exc
-            if not is_kernel_kill_exit(exc.returncode):
-                raise
-            if attempt == 2:
-                break
-            print(
-                f"[audio-toolkit][base] Spleeter was killed by the OS (likely OOM) while using {attempt} stems. Retrying with 2 stems.",
-                file=sys.stderr,
-                flush=True,
-            )
+    stems_dir.mkdir(parents=True, exist_ok=True)
+    track_name = audio_path.stem
+
+    with tempfile.TemporaryDirectory(
+        prefix="spleeter_chunks_",
+        dir=stems_dir,
+    ) as temp_dir_name:
+        temp_dir = Path(temp_dir_name)
+        chunk_paths = split_audio_into_chunks(audio_path, temp_dir / "chunks")
+
+        for attempt in candidate_counts:
+            attempt_dir = temp_dir / f"separated_{attempt}stems"
+            attempt_dir.mkdir()
+            try:
+                for chunk_path in chunk_paths:
+                    cmd = [
+                        str(VENV_BASE.parent / "spleeter"), "separate",
+                        "-p", f"spleeter:{attempt}stems",
+                        "-o", str(attempt_dir),
+                        str(chunk_path),
+                    ]
+                    log_command("base", cmd, debug_steps)
+                    subprocess.run(cmd, check=True)
+
+                chunk_output_dirs = [
+                    attempt_dir / chunk_path.stem
+                    for chunk_path in chunk_paths
+                ]
+                stem_names = sorted(
+                    path.name for path in chunk_output_dirs[0].glob("*.wav")
+                )
+                if not stem_names:
+                    raise RuntimeError(
+                        f"Spleeter did not produce stems for {audio_path}"
+                    )
+
+                for chunk_output_dir in chunk_output_dirs[1:]:
+                    actual_stem_names = sorted(
+                        path.name for path in chunk_output_dir.glob("*.wav")
+                    )
+                    if actual_stem_names != stem_names:
+                        raise RuntimeError(
+                            "Spleeter produced inconsistent stems between audio chunks: "
+                            f"{chunk_output_dir}"
+                        )
+
+                assembled_dir = temp_dir / f"assembled_{attempt}stems"
+                assembled_dir.mkdir()
+                for stem_name in stem_names:
+                    combine_spleeter_stems(
+                        [
+                            chunk_output_dir / stem_name
+                            for chunk_output_dir in chunk_output_dirs
+                        ],
+                        assembled_dir / stem_name,
+                    )
+
+                final_stems_dir = stems_dir / track_name
+                if final_stems_dir.exists():
+                    shutil.rmtree(final_stems_dir)
+                os.replace(assembled_dir, final_stems_dir)
+                return attempt
+            except subprocess.CalledProcessError as exc:
+                last_exc = exc
+                if not is_kernel_kill_exit(exc.returncode):
+                    raise
+                if attempt == 2:
+                    break
+                print(
+                    f"[audio-toolkit][base] Spleeter was killed by the OS (likely OOM) while using {attempt} stems. Retrying with 2 stems.",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
     if last_exc is not None:
         raise RuntimeError(
