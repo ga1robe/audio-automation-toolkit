@@ -512,8 +512,18 @@ def run_process_pipeline(
                     "--output", out_spectro,
                 ]
                 log_command("base", cmd_spectro, debug_steps)
-                subprocess.run(cmd_spectro, check=True)
-                track_manifest["spectrograms"][stem_type] = str(out_spectro) if write_absolute_paths_bool else os.path.relpath(out_spectro, track_out_dir)
+                try:
+                    subprocess.run(cmd_spectro, check=True)
+                except subprocess.CalledProcessError as exc:
+                    out_spectro.unlink(missing_ok=True)
+                    print(
+                        f"[audio-toolkit][base] Spectrogram generation failed for "
+                        f"{stem_file.name} (exit code {exc.returncode}); skipping it.",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                else:
+                    track_manifest["spectrograms"][stem_type] = str(out_spectro) if write_absolute_paths_bool else os.path.relpath(out_spectro, track_out_dir)
         execution_manifest["results"].append(track_manifest)
 
     return execution_manifest
