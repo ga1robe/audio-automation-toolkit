@@ -247,6 +247,8 @@ docker run --rm -it \\
   --spectrogram
 ```
 
+Generowanie spektrogramu jest opcjonalne: jeśli jego proces zostanie przerwany lub zakończy się błędem, potok kontynuuje przetwarzanie bez tego obrazu.
+
 ## Liczba stemów
 
 Program obsługuje następujące warianty separacji:

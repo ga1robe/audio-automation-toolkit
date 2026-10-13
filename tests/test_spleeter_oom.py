@@ -164,6 +164,51 @@ def test_pipeline_runs_analysis_after_spleeter_stems_are_ready(tmp_path):
     assert set(manifest["results"][0]["stems"]) == {"vocals", "accompaniment"}
 
 
+def test_pipeline_continues_when_spectrogram_is_killed(tmp_path, capsys):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    source_path = input_dir / "mix.wav"
+    source_path.touch()
+
+    def fake_spleeter(_audio_path, stems_dir, _stems_count, _debug_steps):
+        track_stems_dir = stems_dir / "mix"
+        track_stems_dir.mkdir(parents=True)
+        (track_stems_dir / "other.wav").touch()
+        return 2
+
+    def fake_run(cmd, check):
+        assert check is True
+        if Path(cmd[1]).name == "analysis.py":
+            analysis_path = Path(cmd[cmd.index("--output") + 1])
+            analysis_path.write_text('{"tempo": 120}', encoding="utf-8")
+        elif Path(cmd[1]).name == "spectrogram.py":
+            output_path = Path(cmd[cmd.index("--output") + 1])
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(b"partial image")
+            raise audio_toolkit.subprocess.CalledProcessError(-9, cmd)
+
+    with (
+        patch.object(audio_toolkit, "run_spleeter_with_fallback", side_effect=fake_spleeter),
+        patch.object(audio_toolkit.subprocess, "run", side_effect=fake_run),
+    ):
+        manifest = audio_toolkit.run_process_pipeline(
+            input_dir,
+            output_dir,
+            stage="base",
+            spectro_bool=True,
+            skip_asr=True,
+        )
+
+    track_manifest = manifest["results"][0]
+    spectrogram_path = output_dir / "mix" / "spectrograms" / "spectrogram.other.png"
+    assert track_manifest["analysis"]["tempo"] == 120
+    assert track_manifest["stems"]["other"]
+    assert track_manifest["spectrograms"] == {}
+    assert not spectrogram_path.exists()
+    assert "skipping it" in capsys.readouterr().err
+
+
 def test_choose_recovery_stems_uses_lower_model_on_oom():
     assert audio_toolkit.choose_recovery_stems(5) == 2
     assert audio_toolkit.choose_recovery_stems(4) == 2
