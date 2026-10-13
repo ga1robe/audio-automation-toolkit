@@ -19,6 +19,14 @@ from pathlib import Path
 # Definicje ścieżek środowisk wirtualnych wewnątrz kontenera
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 SPLEETER_CHUNK_DURATION_MS = 5 * 60 * 1000
+SPLEETER_CHUNK_TIMEOUT_SECONDS = int(
+    os.environ.get("SPLEETER_CHUNK_TIMEOUT_SECONDS", "900")
+)
+SPLEETER_STEM_NAMES = {
+    2: {"vocals.wav", "accompaniment.wav"},
+    4: {"vocals.wav", "drums.wav", "bass.wav", "other.wav"},
+    5: {"vocals.wav", "drums.wav", "bass.wav", "piano.wav", "other.wav"},
+}
 """
 VENV_BASE = Path.home().joinpath('opt', 'venv311-base', 'bin', 'python3.11') if Path.home().joinpath('opt', 'venv311-base', 'bin', 'python3.11').exists() else Path("/opt/venv311-base/bin/python3.11")
 VENV_TF = Path.home().joinpath('opt', 'venv311-tf', 'bin', 'python3.11') if Path.home().joinpath('opt', 'venv311-tf', 'bin', 'python3.11').exists() else Path("opt/venv311-tf/bin/python3.11")
@@ -161,7 +169,7 @@ def run_spleeter_with_fallback(audio_path: Path, stems_dir: Path, stems_count: i
     if fallback is not None:
         candidate_counts.append(fallback)
 
-    last_exc: subprocess.CalledProcessError | None = None
+    last_exc: subprocess.CalledProcessError | subprocess.TimeoutExpired | None = None
     stems_dir.mkdir(parents=True, exist_ok=True)
     track_name = audio_path.stem
 
@@ -176,7 +184,12 @@ def run_spleeter_with_fallback(audio_path: Path, stems_dir: Path, stems_count: i
             attempt_dir = temp_dir / f"separated_{attempt}stems"
             attempt_dir.mkdir()
             try:
-                for chunk_path in chunk_paths:
+                for chunk_index, chunk_path in enumerate(chunk_paths, start=1):
+                    print(
+                        f"[audio-toolkit][base] Separating chunk {chunk_index}/{len(chunk_paths)} "
+                        f"into {attempt} stems.",
+                        flush=True,
+                    )
                     cmd = [
                         str(VENV_BASE.parent / "spleeter"), "separate",
                         "-p", f"spleeter:{attempt}stems",
@@ -184,7 +197,11 @@ def run_spleeter_with_fallback(audio_path: Path, stems_dir: Path, stems_count: i
                         str(chunk_path),
                     ]
                     log_command("base", cmd, debug_steps)
-                    subprocess.run(cmd, check=True)
+                    subprocess.run(
+                        cmd,
+                        check=True,
+                        timeout=SPLEETER_CHUNK_TIMEOUT_SECONDS,
+                    )
 
                 chunk_output_dirs = [
                     attempt_dir / chunk_path.stem
@@ -193,9 +210,10 @@ def run_spleeter_with_fallback(audio_path: Path, stems_dir: Path, stems_count: i
                 stem_names = sorted(
                     path.name for path in chunk_output_dirs[0].glob("*.wav")
                 )
-                if not stem_names:
+                if set(stem_names) != SPLEETER_STEM_NAMES[attempt]:
                     raise RuntimeError(
-                        f"Spleeter did not produce stems for {audio_path}"
+                        f"Spleeter produced unexpected stems for {audio_path}: "
+                        f"{stem_names}; expected {sorted(SPLEETER_STEM_NAMES[attempt])}"
                     )
 
                 for chunk_output_dir in chunk_output_dirs[1:]:
@@ -223,6 +241,11 @@ def run_spleeter_with_fallback(audio_path: Path, stems_dir: Path, stems_count: i
                 if final_stems_dir.exists():
                     shutil.rmtree(final_stems_dir)
                 os.replace(assembled_dir, final_stems_dir)
+                print(
+                    f"[audio-toolkit][base] Assembled {len(stem_names)} stems from "
+                    f"{len(chunk_paths)} chunks: {final_stems_dir}",
+                    flush=True,
+                )
                 return attempt
             except subprocess.CalledProcessError as exc:
                 last_exc = exc
@@ -235,8 +258,25 @@ def run_spleeter_with_fallback(audio_path: Path, stems_dir: Path, stems_count: i
                     file=sys.stderr,
                     flush=True,
                 )
+            except subprocess.TimeoutExpired as exc:
+                last_exc = exc
+                if attempt == 2:
+                    break
+                print(
+                    f"[audio-toolkit][base] Spleeter exceeded the "
+                    f"{SPLEETER_CHUNK_TIMEOUT_SECONDS}s chunk timeout using {attempt} stems. "
+                    "Retrying all chunks with 2 stems.",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
     if last_exc is not None:
+        if isinstance(last_exc, subprocess.TimeoutExpired):
+            raise RuntimeError(
+                f"Spleeter exceeded the {SPLEETER_CHUNK_TIMEOUT_SECONDS}s per-chunk timeout "
+                f"while processing {audio_path}; no usable stems were produced. "
+                "Increase SPLEETER_CHUNK_TIMEOUT_SECONDS or use shorter audio chunks."
+            ) from last_exc
         raise RuntimeError(
             f"Spleeter was terminated by the OS while processing {audio_path}. "
             "This commonly means the Docker container is memory-constrained. "
@@ -357,6 +397,10 @@ def run_process_pipeline(
 
         if stage in {"full", "base"}:
             # 2. Analiza Audio (BPM, Key, Tonality)
+            print(
+                f"[audio-toolkit][base] Analyzing {audio_path.name}.",
+                flush=True,
+            )
             analysis_json_path = track_out_dir / "analysis.json"
             cmd_analysis = [
                 str(VENV_BASE), str(PROJECT_DIR / "src/modules/analysis.py"),
@@ -394,6 +438,10 @@ def run_process_pipeline(
         midi_dir.mkdir(parents=True, exist_ok=True)
         for stem_file in actual_stems_path.glob("*.wav"):
             stem_type = stem_file.stem.lower()
+            print(
+                f"[audio-toolkit] Processing stem {stem_file.name} for {audio_path.name}.",
+                flush=True,
+            )
             track_manifest["stems"][stem_type] = str(stem_file) if write_absolute_paths_bool else os.path.relpath(stem_file, track_out_dir)
 
             if stem_type in ["vocals", "vocal"] and stage in {"full", "asr"} and not skip_asr:
