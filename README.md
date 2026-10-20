@@ -75,13 +75,13 @@ Basic Pitch, Whisper, and source separation can require significant hardware res
 
 Run this command from the project root:
 
-```bash
+```/bin/bash
 docker build -t audio-automation-toolkit .
 ```
 
 To confirm that the image was created:
 
-```bash
+```/bin/bash
 docker images audio-automation-toolkit
 ```
 
@@ -89,7 +89,7 @@ docker images audio-automation-toolkit
 
 The `data/input_audio` and `data/output_results` directories are mounted in the container under `/app/data`.
 
-```bash
+```/bin/bash
 docker run --rm -it \
   -v "$(pwd)/data:/app/data" \
   audio-automation-toolkit \
@@ -108,7 +108,7 @@ docker run --rm -it \
 
 To save a consolidated report to a file:
 
-```bash
+```/bin/bash
 docker run --rm -it \
   -v "$(pwd)/data:/app/data" \
   audio-automation-toolkit \
@@ -133,7 +133,7 @@ Use `--model` to choose the ASR model.
 
 Example using a larger model:
 
-```bash
+```/bin/bash
 docker run --rm -it \
   -v "$(pwd)/data:/app/data" \
   audio-automation-toolkit \
@@ -145,7 +145,7 @@ docker run --rm -it \
 
 Example for Polish:
 
-```bash
+```/bin/bash
 docker run --rm -it \
   -v "$(pwd)/data:/app/data" \
   audio-automation-toolkit \
@@ -160,7 +160,7 @@ Available models depend on the implementation used by `transcription.py`. Larger
 
 Enable spectrogram generation with `--spectro`:
 
-```bash
+```/bin/bash
 docker run --rm -it \
   -v "$(pwd)/data:/app/data" \
   audio-automation-toolkit \
@@ -171,7 +171,7 @@ docker run --rm -it \
 
 `--spectrogram` is an alias for `--spectro`:
 
-```bash
+```/bin/bash
 docker run --rm -it \
   -v "$(pwd)/data:/app/data" \
   audio-automation-toolkit \
@@ -184,7 +184,7 @@ docker run --rm -it \
 
 The CLI accepts `--stems 6`, which selects Demucs' `htdemucs_6s` model:
 
-```bash
+```/bin/bash
 docker run --rm -it \
   -v "$(pwd)/data:/app/data" \
   audio-automation-toolkit \
@@ -260,7 +260,7 @@ audio_toolkit.py INPUT OUTPUT [OPTIONS]
 
 To display help:
 
-```bash
+```/bin/bash
 docker run --rm -it audio-automation-toolkit --help
 ```
 
@@ -339,3 +339,7 @@ Possible future improvements:
 - validation of generated MIDI files,
 - an option to skip selected pipeline stages,
 - recording the execution time of each stage.
+
+## License
+
+Distributed under the Python Software Foundation License / Open-Source guidelines. Check individual component licenses (Demucs, TensorFlow, Whisper) before commercial deployment.
