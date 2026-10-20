@@ -1,32 +1,31 @@
 # Audio Automation Toolkit
 
-Automatyczny potok przetwarzania plików audio z wykorzystaniem separacji stemów, analizy muzycznej, konwersji do MIDI, transkrypcji wokalu oraz generowania spektrogramów.
+An automated audio-processing pipeline for source separation, music analysis, MIDI conversion, vocal transcription, and spectrogram generation.
 
-Projekt uruchamiany jest w kontenerze Docker i korzysta z trzech niezależnych środowisk Python:
+Portfolio: [portfolio-website-development-eta-ten.vercel.app](https://portfolio-website-development-eta-ten.vercel.app/)
 
-- środowisko bazowe — Spleeter, analiza audio i heurystyki,
-- środowisko TensorFlow — Basic Pitch,
-- środowisko ASR — Whisper/faster-whisper lub kompatybilny moduł transkrypcji.
+The project runs in Docker and uses three independent Python environments:
 
-## Możliwości
+- Base environment — Demucs, audio analysis, and heuristics.
+- TensorFlow environment — Basic Pitch.
+- ASR environment — Whisper/faster-whisper or a compatible transcription module.
 
-Toolkit umożliwia:
+## Features
 
-- separację ścieżki audio na stemów przy użyciu Spleeter,
-- analizę tempa/BPM, tonacji i tonalności,
-- konwersję ścieżek melodycznych do MIDI,
-- heurystyczne generowanie MIDI dla perkusji,
-- heurystyczne generowanie MIDI dla basu,
-- transkrypcję wokalu do:
-  - TXT,
-  - JSON,
-  - SRT,
-- generowanie spektrogramów,
-- zapis zbiorczego raportu JSON.
+The toolkit can:
 
-## Obsługiwane formaty wejściowe
+- separate audio into stems with Demucs using the `htdemucs_6s` model,
+- analyze tempo/BPM, key, and tonality,
+- convert melodic stems to MIDI,
+- generate MIDI for drums using heuristics,
+- generate MIDI for bass using heuristics,
+- transcribe vocals to TXT, JSON, and SRT,
+- generate spectrograms,
+- save a consolidated JSON report.
 
-Program wyszukuje w katalogu wejściowym pliki z rozszerzeniami:
+## Supported input formats
+
+The program searches the input directory for files with these extensions:
 
 - `.wav`
 - `.mp3`
@@ -34,312 +33,195 @@ Program wyszukuje w katalogu wejściowym pliki z rozszerzeniami:
 - `.m4a`
 - `.ogg`
 
-Pliki przetwarzane są alfabetycznie.
+Files are processed in alphabetical order.
 
-## Wymagania
+## Requirements
 
-Do uruchomienia projektu potrzebne są:
+To run the project, you need:
 
 - Docker,
-- Docker Compose — opcjonalnie,
-- dostęp do Internetu podczas budowania obrazu, jeżeli zależności nie są dostępne w cache,
-- odpowiednia ilość pamięci RAM i miejsca na dysku.
+- Docker Compose (optional),
+- Internet access while building the image if dependencies are not cached,
+- sufficient memory and disk space.
 
-Przetwarzanie Basic Pitch, Whisper oraz separacja stemów mogą wymagać znacznych zasobów sprzętowych. W przypadku dłuższych nagrań zalecane jest użycie komputera z większą ilością pamięci RAM lub GPU skonfigurowanym dla odpowiednich bibliotek.
+Basic Pitch, Whisper, and source separation can require significant hardware resources. For longer recordings, use a machine with more RAM or a GPU configured for the relevant libraries.
 
-## Struktura projektu
+## Project structure
 
 ```text
 .
 ├── data
-│   ├── input\_audio
+│   ├── input_audio
 │   │   ├── [soundtrack] example 01.wav
 │   │   └── [soundtrack] example 02.wav
-│   └── output\_results
+│   └── output_results
 ├── Dockerfile
 ├── README.md
 ├── requirements
 │   ├── asr.all.txt
-│   ├── base.all.1.txt
 │   ├── base.all.txt
 │   └── tf.all.txt
 └── src
-    ├── audio\_toolkit.py
+    ├── audio_toolkit.py
     └── modules
         ├── analysis.py
-        ├── conversion\_basicpitch.py
+        ├── conversion_basicpitch.py
         ├── heuristics.py
         ├── spectrogram.py
         └── transcription.py
 ```
 
-## Budowanie obrazu Docker
+## Build the Docker image
 
-Projekt korzysta z budowy wielostopniowej. Główny obraz runtime jest budowany z osobnych stage'ów dla środowisk:
+Run this command from the project root:
 
-- `base-builder` — zależności wspólne + Spleeter,
-- `tf-builder` — TensorFlow + Basic Pitch,
-- `asr-builder` — ASR + Whisper,
-- `runtime` — finalny obraz uruchomieniowy z wybranym trybem pracy.
-
-W katalogu głównym projektu wykonaj:
 ```bash
-docker build --target runtime -t audio-toolkit:latest .
+docker build -t audio-automation-toolkit .
 ```
 
-Można też zbudować osobne obrazy builderów, jeżeli potrzebne są tylko narzędzia z konkretnego środowiska:
+To confirm that the image was created:
+
 ```bash
-docker build --target base-builder -t audio-toolkit-base .
-docker build --target tf-builder -t audio-toolkit-tf .
-docker build --target asr-builder -t audio-toolkit-asr .
+docker images audio-automation-toolkit
 ```
 
-Sprawdzenie gotowych obrazów:
-```bash
-docker images | grep audio-toolkit
-```
+## Basic usage
 
-> Weryfikacja w tym środowisku: próba budowy finalnego obrazu zakończyła się błędem zewnętrznym `TLS handshake timeout` podczas pobierania obrazu bazowego z Docker Hub, więc problem nie wynika z samego Dockerfile, tylko z połączeniem sieciowym do rejestru. Komendy powyżej są poprawnym sposobem budowy i powinny działać w środowisku z dostępem do Docker Hub.
+The `data/input_audio` and `data/output_results` directories are mounted in the container under `/app/data`.
 
-## Uruchamianie obrazu runtime z wybranym etapem
-
-Główny obraz runtime akceptuje parametr `--stage`:
-
-- `base` — separacja stemów, analiza audio, heurystyki, spektrogramy,
-- `tf` — Basic Pitch / konwersja do MIDI na bazie TensorFlow,
-- `asr` — transkrypcja ASR/Whisper,
-- `full` — pełny potok (domyślnie).
-
-Przykład uruchomienia pełnego potoku:
 ```bash
 docker run --rm -it \
   -v "$(pwd)/data:/app/data" \
-  audio-toolkit:latest \
-  --stage full \
+  audio-automation-toolkit \
   /app/data/input_audio \
   /app/data/output_results
 ```
 
-Przykład tylko dla etapu bazowego:
+### Defaults
+
+- Stem separation: 6 stems using `htdemucs_6s`.
+- Transcription language: `en`.
+- ASR model: `small`.
+- Spectrogram generation: disabled.
+
+## Write a JSON report
+
+To save a consolidated report to a file:
+
 ```bash
 docker run --rm -it \
   -v "$(pwd)/data:/app/data" \
-  audio-toolkit:latest \
-  --stage base \
+  audio-automation-toolkit \
   /app/data/input_audio \
-  /app/data/output_results
+  /app/data/output_results \
+  --json-out /app/data/output_results/manifest.json
 ```
 
-Przykład tylko dla TensorFlow:
+The report includes:
+
+- processed files,
+- output locations,
+- audio analysis,
+- generated stems,
+- MIDI files,
+- transcription,
+- spectrograms, if enabled.
+
+## Vocal transcription
+
+Use `--model` to choose the ASR model.
+
+Example using a larger model:
+
 ```bash
 docker run --rm -it \
   -v "$(pwd)/data:/app/data" \
-  audio-toolkit:latest \
-  --stage tf \
+  audio-automation-toolkit \
   /app/data/input_audio \
-  /app/data/output_results
-```
-
-Przykład tylko dla ASR:
-```bash
-docker run --rm -it \
-  -v "$(pwd)/data:/app/data" \
-  audio-toolkit:latest \
-  --stage asr \
-  /app/data/input_audio \
-  /app/data/output_results
-```
-
-## Podstawowe uruchomienie
-
-Katalogi data/input_audio oraz data/output_results są mapowane do kontenera jako /app/data.
-```/bin/bash
-
-docker run --rm -it \\
-  -v "\$(pwd)/data:/app/data" \\
-  audio-automation-toolkit \\
-  /app/data/input\_audio \\
-  /app/data/output\_results
-```
-> Dla debugowania kolejności i logowania etapów `base -> tf -> asr` użyj opcji `--debug` lub `--debug-steps`; zobacz sekcję "Debugowanie etapów" poniżej.
-### Domyślne ustawienia:
-
-- separacja na 5 stemów,
-- język transkrypcji: en,
-- model ASR: small,
-- spektrogramy: wyłączone.
-
-`--lang None` (lub `--lang auto`) pozwala Whisperowi automatycznie wykryć język. Aby pominąć transkrypcję w pełnym potoku, użyj `--no-asr`; `--no-whisper` i `--no-whisper-ai` są aliasami tej opcji.
-
-## Uruchomienie z raportem JSON
-
-Aby zapisać zbiorczy raport do pliku:
-
-```/bin/bash
-docker run --rm -it \\
-  -v "\$(pwd)/data:/app/data" \\
-  audio-automation-toolkit \\
-  /app/data/input\_audio \\
-  /app/data/output\_results \\
-  --json-out /app/data/output\_results/manifest.json
-```
-
-Raport zawiera informacje o:
-
-- przetworzonych plikach,
-- lokalizacji wyników,
-- analizie audio,
-- wygenerowanych stemach,
-- plikach MIDI,
-- transkrypcji,
-- spektrogramach, jeżeli zostały włączone.
-
-## Transkrypcja wokalu
-
-Do wyboru modelu ASR służy parametr --model.
-
-Przykład z większym modelem:
-
-```/bin/bash
-docker run --rm -it \\
-  -v "\$(pwd)/data:/app/data" \\
-  audio-automation-toolkit \\
-  /app/data/input\_audio \\
-  /app/data/output\_results \\
-  --model medium \\
+  /app/data/output_results \
+  --model medium \
   --lang en
 ```
 
-Przykład dla języka polskiego:
+Example for Polish:
 
-```/bin/bash
-docker run --rm -it \\
-  -v "\$(pwd)/data:/app/data" \\
-  audio-automation-toolkit \\
-  /app/data/input\_audio \\
-  /app/data/output\_results \\
+```bash
+docker run --rm -it \
+  -v "$(pwd)/data:/app/data" \
+  audio-automation-toolkit \
+  /app/data/input_audio \
+  /app/data/output_results \
   --lang pl
 ```
 
-Dostępne modele zależą od implementacji użytej w module transcription.py. Większe modele zwykle zapewniają lepszą jakość transkrypcji, ale wymagają więcej pamięci i czasu.
+Available models depend on the implementation used by `transcription.py`. Larger models usually provide better transcription quality but require more memory and processing time.
 
-## Generowanie spektrogramów
+## Generate spectrograms
 
-Aby włączyć generowanie spektrogramów, dodaj opcję --spectro:
+Enable spectrogram generation with `--spectro`:
 
-```/bin/bash
-docker run --rm -it \\
-  -v "\$(pwd)/data:/app/data" \\
-  audio-automation-toolkit \\
-  /app/data/input\_audio \\
-  /app/data/output\_results \\
+```bash
+docker run --rm -it \
+  -v "$(pwd)/data:/app/data" \
+  audio-automation-toolkit \
+  /app/data/input_audio \
+  /app/data/output_results \
   --spectro
 ```
 
-Opcja --spectrogram jest aliasem dla --spectro:
+`--spectrogram` is an alias for `--spectro`:
 
-```/bin/bash
-docker run --rm -it \\
-  -v "\$(pwd)/data:/app/data" \\
-  audio-automation-toolkit \\
-  /app/data/input\_audio \\
-  /app/data/output\_results \\
+```bash
+docker run --rm -it \
+  -v "$(pwd)/data:/app/data" \
+  audio-automation-toolkit \
+  /app/data/input_audio \
+  /app/data/output_results \
   --spectrogram
 ```
 
-Generowanie spektrogramu jest opcjonalne: jeśli jego proces zostanie przerwany lub zakończy się błędem, potok kontynuuje przetwarzanie bez tego obrazu.
+## Number of stems
 
-## Liczba stemów
+The CLI accepts `--stems 6`, which selects Demucs' `htdemucs_6s` model:
 
-Program obsługuje następujące warianty separacji:
-```/bin/bash
---stems 2
---stems 4
---stems 5
-```
-
-Przykład:
-```/bin/bash
-docker run --rm -it \\
-  -v "\$(pwd)/data:/app/data" \\
-  audio-automation-toolkit \\
-  /app/data/input\_audio \\
-  /app/data/output\_results \\
-  --stems 4
-```
-
-Domyślna wartość to:
-```text
-5
-```
-
-## Debugowanie etapów
-
-W trakcie rozwiązywania problemów warto włączyć logowanie komend uruchamianych w poszczególnych środowiskach. Domyślnie debug jest wyłączony, aby nie zatruwać standardowego działania aplikacji.
-
-### Flaga skrócona
-
-```/bin/bash
+```bash
 docker run --rm -it \
-  -v "\$(pwd)/data:/app/data" \
+  -v "$(pwd)/data:/app/data" \
   audio-automation-toolkit \
-  /app/data/input\_audio \
-  /app/data/output\_results \
-  --debug
+  /app/data/input_audio \
+  /app/data/output_results \
+  --stems 6
 ```
 
-To jest alias do:
-```/bin/bash
---debug-steps base tf asr
-```
+The default is `6`. If Demucs is terminated by the operating system or exceeds the per-chunk timeout, the toolkit retries with the four-stem `htdemucs` model.
 
-### Flaga szczegółowa
+## Output
 
-```/bin/bash
-docker run --rm -it \
-  -v "\$(pwd)/data:/app/data" \
-  audio-automation-toolkit \
-  /app/data/input\_audio \
-  /app/data/output\_results \
-  --debug-steps base tf
-```
+For an input file such as:
 
-lub tylko dla ASR:
-
-```/bin/bash
-docker run --rm -it \
-  -v "\$(pwd)/data:/app/data" \
-  audio-automation-toolkit \
-  /app/data/input\_audio \
-  /app/data/output\_results \
-  --debug-steps asr
-```
-
-Po użyciu tej flagi konsola pokaże dokładnie, który interpreter i który plik/skrypt są wywoływane w kolejności: `base -> tf -> asr`. Dzięki temu łatwiej zlokalizować etap, który powoduje błąd lub przeciążenie zasobów.
-
-## Wyniki
-
-Dla pliku:
 ```text
-data/input\_audio/example.wav
+data/input_audio/example.wav
 ```
 
-wyniki zapisywane są w katalogu podobnym do:
+results are saved in a directory similar to:
+
 ```text
-data/output\_results/example/
+data/output_results/example/
 ├── analysis.json
 ├── stems
 │   ├── vocals.wav
 │   ├── drums.wav
 │   ├── bass.wav
-│   ├── piano.wav
-│   └── other.wav
+│   ├── other.wav
+│   ├── guitar.wav
+│   └── piano.wav
 ├── midi
-│   ├── example-vocals.mid
-│   ├── example-drums.mid
-│   ├── example-bass.mid
-│   ├── example-piano.mid
-│   └── example-other.mid
+│   ├── vocals.mid
+│   ├── drums.mid
+│   ├── bass.mid
+│   ├── other.mid
+│   ├── guitar.mid
+│   └── piano.mid
 ├── asr
 │   ├── vocals.txt
 │   ├── vocals.json
@@ -350,56 +232,58 @@ data/output\_results/example/
     └── ...
 ```
 
-Katalog spectrograms pojawia się tylko wtedy, gdy użyto opcji `--spectro` lub `--spectrogram`.
+The `spectrograms` directory is created only when `--spectro` or `--spectrogram` is enabled.
 
-Parametry CLI
+## CLI parameters
+
 ```text
-audio\_toolkit.py INPUT OUTPUT [OPTIONS]
+audio_toolkit.py INPUT OUTPUT [OPTIONS]
 ```
 
-### Parametry pozycyjne
+### Positional arguments
 
-| Parametr | Opis |
+| Argument | Description |
 |---|---|
-| `INPUT` | Katalog z plikami audio |
-| `OUTPUT` | Katalog przeznaczony na wyniki |
+| `INPUT` | Directory containing audio files |
+| `OUTPUT` | Directory where results are saved |
 
-### Opcje
+### Options
 
-| Opcja | Domyślna wartość | Opis |
+| Option | Default | Description |
 |---|---:|---|
-| `--stems` | `5` | Liczba stemów Spleeter: `2`, `4` lub `5` |
-| `--lang` | `en` | Język transkrypcji |
-| `--model` | `small` | Model ASR |
-| `--json-out` | brak | Ścieżka zbiorczego raportu JSON |
-| `--spectro` | wyłączone | Generowanie spektrogramów |
-| `--spectrogram` | wyłączone | Alias dla `--spectro` |
+| `--stems` | `6` | Number of stems to request; valid value: `6` |
+| `--lang` | `en` | Transcription language |
+| `--model` | `small` | ASR model |
+| `--json-out` | none | Path for the consolidated JSON report |
+| `--spectro` | disabled | Generate spectrograms |
+| `--spectrogram` | disabled | Alias for `--spectro` |
 
-Pomoc:
-```/bin/bash
+To display help:
+
+```bash
 docker run --rm -it audio-automation-toolkit --help
 ```
 
-## Przebieg przetwarzania
+## Processing pipeline
 
-Dla każdego pliku audio wykonywane są następujące kroki:
+For each audio file, the toolkit:
 
-1. Wyszukanie obsługiwanych plików audio.
-2. Podział źródła na maksymalnie pięciominutowe fragmenty i osobna separacja każdego z nich przez Spleeter.
-3. Połączenie fragmentów każdego stemu w jeden plik WAV, bez wczytywania całego wyniku do pamięci.
-4. Analiza tempa, tonacji i tonalności.
-5. Wykrycie ścieżki wokalnej.
-6. Transkrypcja wokalu z użyciem ASR.
-7. Konwersja ścieżki wokalnej do MIDI.
-8. Heurystyczna konwersja perkusji do MIDI.
-9. Heurystyczna konwersja basu do MIDI.
-10. Konwersja pozostałych stemów do MIDI.
-11. Opcjonalne wygenerowanie spektrogramów.
-12. Zapis raportu JSON.
+1. Finds supported audio files.
+2. Splits the source into chunks of up to five minutes and separates each with Demucs.
+3. Joins the chunks for each stem into one WAV file without loading the entire result into memory.
+4. Analyzes tempo, key, and tonality.
+5. Detects the vocal stem.
+6. Transcribes vocals with ASR.
+7. Converts the vocal stem to MIDI.
+8. Converts drums to MIDI using heuristics.
+9. Converts bass to MIDI using heuristics.
+10. Converts the remaining stems to MIDI.
+11. Optionally generates spectrograms.
+12. Saves the JSON report.
 
-## Środowiska Python
+## Python environments
 
-Obraz Docker zawiera trzy niezależne środowiska wirtualne:
+The Docker image contains three independent virtual environments:
 
 ```text
 /opt/venv311-base
@@ -407,13 +291,13 @@ Obraz Docker zawiera trzy niezależne środowiska wirtualne:
 /opt/venv311-asr
 ```
 
-Takie rozwiązanie pozwala odseparować zależności:
+This separates dependencies:
 
-- `venv311-base` — podstawowe narzędzia audio, Spleeter i analiza,
-- `venv311-tf` — TensorFlow i Basic Pitch,
-- `venv311-asr` — biblioteki związane z rozpoznawaniem mowy.
+- `venv311-base` — audio tools, Demucs, and analysis,
+- `venv311-tf` — TensorFlow and Basic Pitch,
+- `venv311-asr` — speech-recognition libraries.
 
-Zmienne środowiskowe wykorzystywane przez aplikację:
+The application uses these environment variables:
 
 ```text
 VENV_BASE
@@ -421,38 +305,37 @@ VENV_TF
 VENV_ASR
 ```
 
-## Uwagi dotyczące danych wejściowych i wyjściowych
+## Input and output data
 
-Pliki audio mogą zajmować dużo miejsca. Zaleca się:
+Audio files can take up a lot of disk space. We recommend:
 
-- nie dodawać dużych plików wynikowych do repozytorium,
-- przechowywać własne nagrania lokalnie,
-- używać Git LFS, jeśli pliki audio mają być wersjonowane,
-- ignorować katalogi wynikowe w `.gitignore`.
+- not adding large output files to the repository,
+- keeping personal recordings local,
+- using Git LFS if audio files need to be version-controlled,
+- ignoring output directories in `.gitignore`.
 
-Modele i zależności używane przez Spleeter, Basic Pitch oraz moduł ASR mogą podlegać odrębnym warunkom licencyjnym. Przed publicznym użyciem projektu należy sprawdzić licencje wszystkich wykorzystanych komponentów.
+Models and dependencies used by Demucs, Basic Pitch, and the ASR module may have separate license terms. Check the licenses of all components before using the project publicly.
 
-## Ograniczenia
+## Limitations
 
-- Jakość separacji zależy od rodzaju i jakości nagrania.
-- Wyniki konwersji audio do MIDI mogą wymagać ręcznej korekty.
-- Heurystyczna detekcja basu i perkusji nie zastępuje pełnej analizy muzycznej.
-- Transkrypcja może zawierać błędy przy muzyce z pogłosem, hałasem lub wieloma wokalami.
-- Pierwsze uruchomienie może być dłuższe ze względu na pobieranie modeli.
-- Przetwarzanie wielu długich plików może wymagać dużej ilości pamięci RAM i miejsca na dysku.
+- Separation quality depends on the recording and its quality.
+- Audio-to-MIDI conversion may require manual correction.
+- Heuristic bass and drum detection is not a substitute for full musical analysis.
+- Transcription may contain errors when music includes reverb, noise, or multiple vocalists.
+- The first run may take longer because models need to be downloaded.
+- Processing multiple long files may require substantial RAM and disk space.
 
-## Rozwój projektu
+## Development ideas
 
-Przykładowy kierunek dalszego rozwoju:
+Possible future improvements:
 
-- obsługa konfiguracji przez plik YAML lub TOML,
-- możliwość przetwarzania pojedynczego pliku,
-- logowanie do pliku,
-- raportowanie błędów per plik zamiast zatrzymywania całego potoku,
-- testy jednostkowe modułów,
-- testy integracyjne obrazu Docker,
-- obsługa GPU,
-- walidacja wygenerowanych plików MIDI,
-- możliwość pomijania wybranych etapów potoku,
-- zapis czasu wykonania poszczególnych etapów.
-
+- configuration through YAML or TOML,
+- support for processing a single file,
+- logging to a file,
+- per-file error reporting instead of stopping the entire pipeline,
+- unit tests for modules,
+- Docker image integration tests,
+- GPU support,
+- validation of generated MIDI files,
+- an option to skip selected pipeline stages,
+- recording the execution time of each stage.
