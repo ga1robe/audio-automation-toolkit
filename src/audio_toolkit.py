@@ -18,27 +18,14 @@ from pathlib import Path
 
 # Definicje ścieżek środowisk wirtualnych wewnątrz kontenera
 PROJECT_DIR = Path(__file__).resolve().parent.parent
-SPLEETER_CHUNK_DURATION_MS = 5 * 60 * 1000
-SPLEETER_CHUNK_TIMEOUT_SECONDS = int(
-    os.environ.get("SPLEETER_CHUNK_TIMEOUT_SECONDS", "900")
+DEMUCS_CHUNK_DURATION_MS = 5 * 60 * 1000
+DEMUCS_CHUNK_TIMEOUT_SECONDS = int(
+    os.environ.get("DEMUCS_CHUNK_TIMEOUT_SECONDS", "900")
 )
 DEMUCS_STEM_NAMES = {
-    2: {"vocals.wav", "accompaniment.wav"},
     4: {"vocals.wav", "drums.wav", "bass.wav", "other.wav"},
     6: {"vocals.wav", "drums.wav", "bass.wav", "other.wav", "guitar.wav", "piano.wav"},
 }
-"""
-SPLEETER_STEM_NAMES = {
-    2: {"vocals.wav", "accompaniment.wav"},
-    4: {"vocals.wav", "drums.wav", "bass.wav", "other.wav"},
-    5: {"vocals.wav", "drums.wav", "bass.wav", "piano.wav", "other.wav"},
-}
-"""
-"""
-VENV_BASE = Path.home().joinpath('opt', 'venv311-base', 'bin', 'python3.11') if Path.home().joinpath('opt', 'venv311-base', 'bin', 'python3.11').exists() else Path("/opt/venv311-base/bin/python3.11")
-VENV_TF = Path.home().joinpath('opt', 'venv311-tf', 'bin', 'python3.11') if Path.home().joinpath('opt', 'venv311-tf', 'bin', 'python3.11').exists() else Path("opt/venv311-tf/bin/python3.11")
-VENV_ASR = Path.home().joinpath('opt','venv311-asr','bin','python3.11') if Path.home().joinpath('opt','venv311-asr','bin','python3.11').exists() else Path("opt/venv311-asr/bin/python3.11")
-"""
 
 VENV_BASE = Path(
     os.environ.get("VENV_BASE", "/opt/venv311-base")
@@ -78,12 +65,6 @@ def log_command(stage: str, cmd: list[str], debug_stages: set[str] | None = None
     print(f"[audio-toolkit][{stage}] running: {quoted_cmd}", flush=True)
 
 
-def choose_recovery_stems(stems_count: int) -> int | None:
-    if stems_count in {5, 4}:
-        return 2
-    return None
-
-
 def normalize_asr_language(language: str | None) -> str | None:
     if language is None:
         return None
@@ -121,7 +102,7 @@ def split_audio_into_chunks(audio_path: Path, chunks_dir: Path) -> list[Path]:
         segment = AudioSegment.from_file(
             str(audio_path),
             start_second=start_ms / 1000,
-            duration=SPLEETER_CHUNK_DURATION_MS / 1000,
+            duration=DEMUCS_CHUNK_DURATION_MS / 1000,
         )
         segment_duration_ms = len(segment)
         if segment_duration_ms == 0:
@@ -132,9 +113,9 @@ def split_audio_into_chunks(audio_path: Path, chunks_dir: Path) -> list[Path]:
         del segment
         chunks.append(chunk_path)
 
-        if segment_duration_ms < SPLEETER_CHUNK_DURATION_MS:
+        if segment_duration_ms < DEMUCS_CHUNK_DURATION_MS:
             break
-        start_ms += SPLEETER_CHUNK_DURATION_MS
+        start_ms += DEMUCS_CHUNK_DURATION_MS
 
     if not chunks:
         raise RuntimeError(f"Nie udało się odczytać audio z pliku: {audio_path}")
@@ -142,7 +123,7 @@ def split_audio_into_chunks(audio_path: Path, chunks_dir: Path) -> list[Path]:
     return chunks
 
 
-def combine_spleeter_stems(
+def combine_demucs_stems(
     chunk_stem_paths: list[Path],
     output_path: Path,
 ) -> None:
@@ -163,7 +144,7 @@ def combine_spleeter_stems(
                         or params.compname != first_params.compname
                     ):
                         raise RuntimeError(
-                            f"Niezgodny format ścieżki Spleeter: {chunk_stem_path}"
+                            f"Incompatible audio format in Demucs stem: {chunk_stem_path}"
                         )
 
                     while frames := chunk.readframes(65536):
@@ -171,16 +152,12 @@ def combine_spleeter_stems(
 
 
 def run_demucs_with_fallback(audio_path: Path, stems_dir: Path, stems_count: int, debug_steps: set[str] | None = None) -> int:
-    # Wybieramy odpowiedni model Demucs w zależności od żądanej liczby stemów
-    if stems_count >= 6:
-        model_name = "htdemucs_6s"
-        candidate_counts = [6, 4] # Fallback do 4 stemów w razie OOM
-    elif stems_count >= 4:
-        model_name = "htdemucs"
-        candidate_counts = [4, 2]
+    if stems_count == 6:
+        candidate_counts = [6, 4]
+    elif stems_count == 4:
+        candidate_counts = [4]
     else:
-        model_name = "htdemucs"
-        candidate_counts = [2]
+        raise ValueError(f"Unsupported Demucs stem count: {stems_count}")
 
     last_exc: subprocess.CalledProcessError | subprocess.TimeoutExpired | None = None
     stems_dir.mkdir(parents=True, exist_ok=True)
@@ -204,7 +181,6 @@ def run_demucs_with_fallback(audio_path: Path, stems_dir: Path, stems_count: int
                         f"using Demucs model '{active_model}' ({attempt_stems} stems).",
                         flush=True,
                     )
-                    # Wywołanie Demucs jako modułu Pythona w środowisku base
                     cmd = [
                         str(VENV_BASE), "-m", "demucs.separate",
                         "-n", active_model,
@@ -215,7 +191,7 @@ def run_demucs_with_fallback(audio_path: Path, stems_dir: Path, stems_count: int
                     subprocess.run(
                         cmd,
                         check=True,
-                        timeout=SPLEETER_CHUNK_TIMEOUT_SECONDS,
+                        timeout=DEMUCS_CHUNK_TIMEOUT_SECONDS,
                     )
 
                 # Demucs tworzy strukturę: attempt_dir / model_name / chunk_stem / stem_files.wav
@@ -227,20 +203,29 @@ def run_demucs_with_fallback(audio_path: Path, stems_dir: Path, stems_count: int
                 stem_names = sorted(
                     path.name for path in chunk_output_dirs[0].glob("*.wav")
                 )
-                expected_stems = DEMUCS_STEM_NAMES.get(attempt_stems, DEMUCS_STEM_NAMES[4])
+                expected_stems = DEMUCS_STEM_NAMES[attempt_stems]
                 
-                # Walidacja wygenerowanych stemów
-                if not expected_stems.issubset(set(stem_names)):
+                if set(stem_names) != expected_stems:
                     raise RuntimeError(
                         f"Demucs produced unexpected stems for {audio_path}: "
-                        f"{stem_names}; expected at least {sorted(expected_stems)}"
+                        f"{stem_names}; expected {sorted(expected_stems)}"
                     )
+
+                for chunk_output_dir in chunk_output_dirs[1:]:
+                    actual_stem_names = {
+                        path.name for path in chunk_output_dir.glob("*.wav")
+                    }
+                    if actual_stem_names != expected_stems:
+                        raise RuntimeError(
+                            "Demucs produced inconsistent stems between audio chunks: "
+                            f"{chunk_output_dir}"
+                        )
 
                 assembled_dir = temp_dir / f"assembled_{attempt_stems}stems"
                 assembled_dir.mkdir(exist_ok=True)
                 
                 for stem_name in stem_names:
-                    combine_spleeter_stems( # Funkcja scalania WAV pozostaje bez zmian
+                    combine_demucs_stems(
                         [
                             chunk_output_dir / stem_name
                             for chunk_output_dir in chunk_output_dirs
@@ -278,135 +263,10 @@ def run_demucs_with_fallback(audio_path: Path, stems_dir: Path, stems_count: int
 
     raise RuntimeError(f"Demucs failed for {audio_path}: {last_exc}")
 
-"""
-def run_spleeter_with_fallback(audio_path: Path, stems_dir: Path, stems_count: int, debug_steps: set[str] | None = None) -> int:
-    candidate_counts = [stems_count]
-    fallback = choose_recovery_stems(stems_count)
-    if fallback is not None:
-        candidate_counts.append(fallback)
-
-    last_exc: subprocess.CalledProcessError | subprocess.TimeoutExpired | None = None
-    stems_dir.mkdir(parents=True, exist_ok=True)
-    track_name = audio_path.stem
-
-    with tempfile.TemporaryDirectory(
-        prefix="spleeter_chunks_",
-        dir=stems_dir,
-    ) as temp_dir_name:
-        temp_dir = Path(temp_dir_name)
-        chunk_paths = split_audio_into_chunks(audio_path, temp_dir / "chunks")
-
-        for attempt in candidate_counts:
-            attempt_dir = temp_dir / f"separated_{attempt}stems"
-            attempt_dir.mkdir()
-            try:
-                for chunk_index, chunk_path in enumerate(chunk_paths, start=1):
-                    print(
-                        f"[audio-toolkit][base] Separating chunk {chunk_index}/{len(chunk_paths)} "
-                        f"into {attempt} stems.",
-                        flush=True,
-                    )
-                    cmd = [
-                        str(VENV_BASE.parent / "spleeter"), "separate",
-                        "-p", f"spleeter:{attempt}stems",
-                        "-o", str(attempt_dir),
-                        str(chunk_path),
-                    ]
-                    log_command("base", cmd, debug_steps)
-                    subprocess.run(
-                        cmd,
-                        check=True,
-                        timeout=SPLEETER_CHUNK_TIMEOUT_SECONDS,
-                    )
-
-                chunk_output_dirs = [
-                    attempt_dir / chunk_path.stem
-                    for chunk_path in chunk_paths
-                ]
-                stem_names = sorted(
-                    path.name for path in chunk_output_dirs[0].glob("*.wav")
-                )
-                if set(stem_names) != SPLEETER_STEM_NAMES[attempt]:
-                    raise RuntimeError(
-                        f"Spleeter produced unexpected stems for {audio_path}: "
-                        f"{stem_names}; expected {sorted(SPLEETER_STEM_NAMES[attempt])}"
-                    )
-
-                for chunk_output_dir in chunk_output_dirs[1:]:
-                    actual_stem_names = sorted(
-                        path.name for path in chunk_output_dir.glob("*.wav")
-                    )
-                    if actual_stem_names != stem_names:
-                        raise RuntimeError(
-                            "Spleeter produced inconsistent stems between audio chunks: "
-                            f"{chunk_output_dir}"
-                        )
-
-                assembled_dir = temp_dir / f"assembled_{attempt}stems"
-                assembled_dir.mkdir()
-                for stem_name in stem_names:
-                    combine_spleeter_stems(
-                        [
-                            chunk_output_dir / stem_name
-                            for chunk_output_dir in chunk_output_dirs
-                        ],
-                        assembled_dir / stem_name,
-                    )
-
-                final_stems_dir = stems_dir / track_name
-                if final_stems_dir.exists():
-                    shutil.rmtree(final_stems_dir)
-                os.replace(assembled_dir, final_stems_dir)
-                print(
-                    f"[audio-toolkit][base] Assembled {len(stem_names)} stems from "
-                    f"{len(chunk_paths)} chunks: {final_stems_dir}",
-                    flush=True,
-                )
-                return attempt
-            except subprocess.CalledProcessError as exc:
-                last_exc = exc
-                if not is_kernel_kill_exit(exc.returncode):
-                    raise
-                if attempt == 2:
-                    break
-                print(
-                    f"[audio-toolkit][base] Spleeter was killed by the OS (likely OOM) while using {attempt} stems. Retrying with 2 stems.",
-                    file=sys.stderr,
-                    flush=True,
-                )
-            except subprocess.TimeoutExpired as exc:
-                last_exc = exc
-                if attempt == 2:
-                    break
-                print(
-                    f"[audio-toolkit][base] Spleeter exceeded the "
-                    f"{SPLEETER_CHUNK_TIMEOUT_SECONDS}s chunk timeout using {attempt} stems. "
-                    "Retrying all chunks with 2 stems.",
-                    file=sys.stderr,
-                    flush=True,
-                )
-
-    if last_exc is not None:
-        if isinstance(last_exc, subprocess.TimeoutExpired):
-            raise RuntimeError(
-                f"Spleeter exceeded the {SPLEETER_CHUNK_TIMEOUT_SECONDS}s per-chunk timeout "
-                f"while processing {audio_path}; no usable stems were produced. "
-                "Increase SPLEETER_CHUNK_TIMEOUT_SECONDS or use shorter audio chunks."
-            ) from last_exc
-        raise RuntimeError(
-            f"Spleeter was terminated by the OS while processing {audio_path}. "
-            "This commonly means the Docker container is memory-constrained. "
-            f"Requested stems: {stems_count}. The toolkit automatically retried with 2 stems, but the process still failed. "
-            "Try a shorter audio file, reduce input length, or run the container with more RAM."
-        ) from last_exc
-
-    raise RuntimeError(f"Spleeter failed for {audio_path} without producing a valid result.")
-"""
-
 def run_process_pipeline(
     input_dir: Path,
     output_dir: Path,
-    stems_count: int = 5,
+    stems_count: int = 6,
     asr_language: str = "en",
     asr_model: str = "small",
     spectro_bool: bool = False,
@@ -488,10 +348,8 @@ def run_process_pipeline(
         }
 
         if stage in {"full", "base"}:
-            # 1. Separacja Spleeter
-            actual_stems_count = run_demucs_with_fallback(audio_path, stems_dir, stems_count, debug_steps)
-            # actual_stems_count = run_spleeter_with_fallback(audio_path, stems_dir, stems_count, debug_steps)
-            stems_count = actual_stems_count
+            # 1. Separate audio with Demucs.
+            run_demucs_with_fallback(audio_path, stems_dir, stems_count, debug_steps)
 
             short_actual_stems_path_bool = True
             actual_stems_path = stems_dir / track_name
@@ -504,7 +362,7 @@ def run_process_pipeline(
 
             if not actual_stems_path.is_dir():
                 raise RuntimeError(
-                    f"Spleeter nie utworzył oczekiwanego katalogu stemów: "
+                    f"Demucs did not create the expected stem directory: "
                     f"{actual_stems_path}"
                 )
         else:
@@ -658,8 +516,13 @@ def main():
         default="full",
         help="Wybiera, który etap ma zostać uruchomiony: base, tf, asr lub full."
     )
-    parser.add_argument("--stems", type=int, default=6, choices=[2, 4, 6], help="Liczba stemów Demucs: 2, 4 lub 6 (domyślnie: 6 dla htdemucs_6s)")
-    # parser.add_argument("--stems", type=int, default=5, choices=[2, 4, 5], help="Liczba stemów Spleeter (domyślnie: 5)")
+    parser.add_argument(
+        "--stems",
+        type=int,
+        default=6,
+        choices=[6],
+        help="Number of stems to separate (6; uses htdemucs_6s by default).",
+    )
     parser.add_argument("--lang", type=str, default="en", help="Język transkrypcji ASR (domyślnie: en)")
     parser.add_argument(
         "--no-asr", "--no-whisper", "--no-whisper-ai",
