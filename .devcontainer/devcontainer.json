@@ -1,0 +1,28 @@
+{
+    "name": "audio-automation-toolkit-base",
+    "dockerComposeFile": [
+        "../docker/compose.yaml"
+    ],
+    "service": "base",
+    // "service": "tf",
+    // "service": "asr",
+    "workspaceFolder": "/workspace",
+    "shutdownAction": "stopCompose",
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-python.python",
+                "ms-python.vscode-pylance",
+                "ms-azuretools.vscode-docker",
+                "eamodio.gitlens"
+            ],
+            "settings": {
+                "python.defaultInterpreterPath": "/usr/local/bin/python3.11",
+                "python.analysis.extraPaths": [
+                    "${workspaceFolder}/src"
+                ],
+                "python.terminal.activateEnvironment": true
+            }
+        }
+    }
+}
