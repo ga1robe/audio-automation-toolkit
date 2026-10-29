@@ -1,6 +1,8 @@
 # syntax=docker/dockerfile:1.7
 
-FROM python:3.11-slim AS base-builder
+ARG BASE_IMAGE=pytorch/pytorch:2.8.0-cuda12.6-cudnn9-runtime@sha256:dab81780fd94483b67b4b5679cc0024939b08e48540d39476d284cb29002ed69
+
+FROM ${BASE_IMAGE} AS base-builder
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -19,10 +21,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN python -m venv "$VIRTUAL_ENV"
 COPY requirements/base.all.txt /tmp/requirements/base.all.txt
-RUN python -m pip install --upgrade pip setuptools wheel && \
-    python -m pip install --no-cache-dir --prefer-binary -r /tmp/requirements/base.all.txt
+RUN python -m pip install --no-cache-dir --prefer-binary -r /tmp/requirements/base.all.txt
 
-FROM python:3.11-slim AS tf-builder
+FROM ${BASE_IMAGE} AS tf-builder
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -41,10 +42,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN python -m venv "$VIRTUAL_ENV"
 COPY requirements/tf.all.txt /tmp/requirements/tf.all.txt
-RUN python -m pip install --upgrade pip setuptools wheel && \
-    python -m pip install --no-cache-dir --prefer-binary -r /tmp/requirements/tf.all.txt
+RUN python -m pip install --no-cache-dir --prefer-binary -r /tmp/requirements/tf.all.txt
 
-FROM python:3.11-slim AS asr-builder
+FROM ${BASE_IMAGE} AS asr-builder
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -63,10 +63,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN python -m venv "$VIRTUAL_ENV"
 COPY requirements/asr.all.txt /tmp/requirements/asr.all.txt
-RUN python -m pip install --upgrade pip setuptools wheel && \
-    python -m pip install --no-cache-dir --prefer-binary -r /tmp/requirements/asr.all.txt
+RUN python -m pip install --no-cache-dir --prefer-binary -r /tmp/requirements/asr.all.txt
 
-FROM python:3.11-slim AS runtime
+FROM ${BASE_IMAGE} AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
