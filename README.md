@@ -46,6 +46,8 @@ To run the project, you need:
 
 Basic Pitch, Whisper, and source separation can require significant hardware resources. For longer recordings, use a machine with more RAM or a GPU configured for the relevant libraries.
 
+The Docker images use the digest-pinned `pytorch/pytorch:2.8.0-cuda12.6-cudnn9-runtime` base and Python 3.11. The base, TensorFlow, and ASR virtual environments install their separately pinned dependencies from `requirements/`. To use an NVIDIA GPU, install the NVIDIA Container Toolkit on the host and pass `--gpus all` to `docker run`; the container image does not include host GPU drivers.
+
 ## Project structure
 
 ```text
