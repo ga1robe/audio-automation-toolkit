@@ -99,6 +99,16 @@ docker run --rm -it \
   /app/data/output_results
 ```
 
+## Process a batch with Docker Compose
+
+Put audio files in `./input` and run the following from the project root. Compose builds the image if needed, processes the full batch, and writes results to `./output`:
+
+```/bin/bash
+docker compose run --build --rm audio-toolkit
+```
+
+The input folder is mounted read-only. The output folder is mounted for writing.
+
 ### Defaults
 
 - Stem separation: 6 stems using `htdemucs_6s`.
