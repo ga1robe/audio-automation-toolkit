@@ -20,7 +20,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN python -m venv "$VIRTUAL_ENV"
 COPY requirements/base.all.txt /tmp/requirements/base.all.txt
-RUN python -m pip install --no-cache-dir --prefer-binary -r /tmp/requirements/base.all.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install --timeout=300 --retries=10 --prefer-binary \
+    -r /tmp/requirements/base.all.txt
 
 FROM ${BASE_IMAGE} AS tf-builder
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -40,7 +42,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN python -m venv "$VIRTUAL_ENV"
 COPY requirements/tf.all.txt /tmp/requirements/tf.all.txt
-RUN python -m pip install --no-cache-dir --prefer-binary -r /tmp/requirements/tf.all.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install --timeout=300 --retries=10 --prefer-binary \
+    -r /tmp/requirements/tf.all.txt
 
 FROM ${BASE_IMAGE} AS asr-builder
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -60,7 +64,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN python -m venv "$VIRTUAL_ENV"
 COPY requirements/asr.all.txt /tmp/requirements/asr.all.txt
-RUN python -m pip install --no-cache-dir --prefer-binary -r /tmp/requirements/asr.all.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install --timeout=300 --retries=10 --prefer-binary \
+    -r /tmp/requirements/asr.all.txt
 
 FROM ${BASE_IMAGE} AS runtime
 ENV DEBIAN_FRONTEND=noninteractive \
