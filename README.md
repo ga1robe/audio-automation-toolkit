@@ -132,12 +132,20 @@ docker run --rm -it \
 The report includes:
 
 - processed files,
+- each source file's SHA-256 checksum, duration, sample rate, and channel count,
 - output locations,
-- audio analysis,
+- audio analysis, including BPM and detected key/tonality,
+- Demucs, Basic Pitch, and Whisper package/model versions where each stage ran,
 - generated stems,
-- MIDI files,
-- transcription,
+- MIDI files and transcription text,
 - spectrograms, if enabled.
+- per-track and overall processing time, status, and warnings.
+
+Each track retains the existing `stems`, `midi`, `transcription`, and
+`spectrograms` fields. The `outputs` field also provides lists of generated
+stem, MIDI, and lyrics paths. Model package versions are read from the pinned
+requirements files used to build the corresponding environments; the selected
+model name is recorded separately.
 
 ## Vocal transcription
 
