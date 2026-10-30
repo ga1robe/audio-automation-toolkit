@@ -94,6 +94,15 @@ def test_pipeline_runs_analysis_after_demucs_stems_are_ready(tmp_path):
             analysis_path.write_text('{"tempo": 120}', encoding="utf-8")
 
     with (
+        patch.object(
+            audio_toolkit,
+            "get_audio_metadata",
+            return_value={
+                "duration_seconds": 1.0,
+                "sample_rate": 44100,
+                "channels": 2,
+            },
+        ),
         patch.object(audio_toolkit, "run_demucs_with_fallback", side_effect=fake_demucs),
         patch.object(audio_toolkit.subprocess, "run", side_effect=fake_run) as run,
     ):
@@ -107,6 +116,71 @@ def test_pipeline_runs_analysis_after_demucs_stems_are_ready(tmp_path):
     assert run.call_count == 2
     assert manifest["results"][0]["analysis"]["tempo"] == 120
     assert set(manifest["results"][0]["stems"]) == {"vocals", "drums"}
+    track_manifest = manifest["results"][0]
+    assert track_manifest["source_file"] == "mix.wav"
+    assert track_manifest["checksum"] == (
+        "e3b0c44298fc1c149afbf4c8996fb924"
+        "27ae41e4649b934ca495991b7852b855"
+    )
+    assert track_manifest["duration_seconds"] == 1.0
+    assert track_manifest["sample_rate"] == 44100
+    assert track_manifest["channels"] == 2
+    assert track_manifest["analysis"]["bpm"] == 120
+    assert track_manifest["analysis"]["key"] is None
+    assert track_manifest["models"]["demucs"]["model"] == "htdemucs"
+    assert track_manifest["status"] == "success"
+    assert set(track_manifest["outputs"]["stems"]) == {
+        "stems/vocals.wav",
+        "stems/drums.wav",
+    }
+    assert track_manifest["outputs"]["midi"]
+    assert track_manifest["processing_time_seconds"] >= 0
+
+
+def test_pipeline_records_analysis_failure_in_manifest(tmp_path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    (input_dir / "mix.wav").touch()
+
+    def fake_demucs(_audio_path, stems_dir, _stems_count, _debug_steps):
+        track_stems_dir = stems_dir / "mix"
+        track_stems_dir.mkdir(parents=True)
+        (track_stems_dir / "other.wav").touch()
+        return 4
+
+    def fail_analysis(cmd, check):
+        assert check is True
+        raise audio_toolkit.subprocess.CalledProcessError(1, cmd)
+
+    with (
+        patch.object(
+            audio_toolkit,
+            "get_audio_metadata",
+            return_value={
+                "duration_seconds": 1.0,
+                "sample_rate": 44100,
+                "channels": 2,
+            },
+        ),
+        patch.object(audio_toolkit, "run_demucs_with_fallback", side_effect=fake_demucs),
+        patch.object(audio_toolkit.subprocess, "run", side_effect=fail_analysis),
+    ):
+        manifest = audio_toolkit.run_process_pipeline(
+            input_dir,
+            output_dir,
+            stage="base",
+            skip_asr=True,
+        )
+
+    track_manifest = manifest["results"][0]
+    assert manifest["status"] == "failed"
+    assert track_manifest["status"] == "failed"
+    assert track_manifest["warnings"] == [
+        "Audio analysis failed with exit code 1"
+    ]
+    assert track_manifest["logs"][-1]["level"] == "info"
+    assert "failed" in track_manifest["logs"][-1]["message"]
 
 
 def test_pipeline_continues_when_spectrogram_is_killed(tmp_path, capsys):
@@ -133,6 +207,15 @@ def test_pipeline_continues_when_spectrogram_is_killed(tmp_path, capsys):
             raise audio_toolkit.subprocess.CalledProcessError(-9, cmd)
 
     with (
+        patch.object(
+            audio_toolkit,
+            "get_audio_metadata",
+            return_value={
+                "duration_seconds": 1.0,
+                "sample_rate": 44100,
+                "channels": 2,
+            },
+        ),
         patch.object(audio_toolkit, "run_demucs_with_fallback", side_effect=fake_demucs),
         patch.object(audio_toolkit.subprocess, "run", side_effect=fake_run),
     ):
@@ -149,6 +232,10 @@ def test_pipeline_continues_when_spectrogram_is_killed(tmp_path, capsys):
     assert track_manifest["analysis"]["tempo"] == 120
     assert track_manifest["stems"]["other"]
     assert track_manifest["spectrograms"] == {}
+    assert track_manifest["status"] == "success"
+    assert track_manifest["warnings"] == [
+        "Spectrogram generation failed for other.wav (exit code -9)"
+    ]
     assert not spectrogram_path.exists()
     assert "skipping it" in capsys.readouterr().err
 
