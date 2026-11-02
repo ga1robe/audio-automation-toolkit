@@ -96,6 +96,7 @@ COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 COPY src /workspace/src
+COPY requirements /workspace/requirements
 COPY README.md /workspace/README.md
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

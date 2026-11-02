@@ -94,6 +94,7 @@ COPY --from=base-builder /opt/venv311-base /opt/venv311-base
 COPY --from=tf-builder /opt/venv311-tf /opt/venv311-tf
 COPY --from=asr-builder /opt/venv311-asr /opt/venv311-asr
 COPY src/ /app/src/
+COPY requirements/ /app/requirements/
 
 RUN test -x "${VENV_BASE}/bin/python3.11" && \
     test -x "${VENV_TF}/bin/python3.11" && \
