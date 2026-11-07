@@ -1,0 +1,138 @@
+bank,program,preset_name,category,description
+0,0,Acoustic Grand Piano,Piano,Bright, resonant grand piano
+0,1,Bright Acoustic Piano,Piano,Bright and punchy piano
+0,2,Electric Grand Piano,Piano,Electric grand piano sound
+0,3,Honky-tonk Piano,Piano,Honky-tonk style piano
+0,4,Electric Piano 1,Electric Piano,Rhodes-style electric piano
+0,5,Electric Piano 2,Electric Piano,Wurlitzer-style electric piano
+0,6,Harpsichord,Plucked,Harpsichord with bright attack
+0,7,Clavichord,Plucked,Clavichord with soft attack
+0,8,Celesta,Mallet,Bell-like mallet instrument
+0,9,Glockenspiel,Mallet,High-pitched metallic mallet
+0,10,Music Box,Mallet,Mechanical music box
+0,11,Vibraphone,Mallet,Vibraphone with vibrato
+0,12,Marimba,Mallet,Warm wooden mallet sound
+0,13,Xylophone,Mallet,Bright wooden mallet
+0,14,Tubular Bells,Mallet,Deep resonant bells
+0,15,Dulcimer,Mallet,Hammered dulcimer
+0,16,Drawbar Organ,Organ,Classic Hammond B3 organ
+0,17,Percussive Organ,Organ,Percussive organ attack
+0,18,Rock Organ,Organ,Rock-style organ
+0,19,Church Organ,Organ,Large pipe organ
+0,20,Reed Organ,Organ,Accordion-like organ
+0,21,Accordion,Accordion,Bright accordion
+0,22,Harmonica,Wind,Harmonica with breath
+0,23,Tango Accordion,Accordion,Tango-style accordion
+0,24,Acoustic Guitar (nylon),Guitar,Classical nylon string guitar
+0,25,Acoustic Guitar (steel),Guitar,Steel string acoustic guitar
+0,26,Electric Guitar (jazz),Guitar,Warm jazz electric guitar
+0,27,Electric Guitar (clean),Guitar,Clean electric guitar tone
+0,28,Electric Guitar (muted),Guitar,Muted electric guitar
+0,29,Overdriven Guitar,Guitar,Overdriven electric guitar
+0,30,Distortion Guitar,Guitar,Distorted electric guitar
+0,31,Guitar Harmonics,Guitar,Guitar with harmonic overtones
+0,32,Acoustic Bass,Bass,Acoustic upright bass
+0,33,Electric Bass (finger),Bass,Fingered electric bass
+0,34,Electric Bass (pick),Bass,Picked electric bass
+0,35,Fretless Bass,Bass,Fretless bass with slides
+0,36,Slap Bass 1,Bass,Slap bass with attack
+0,37,Slap Bass 2,Bass,Slap bass variant
+0,38,Synth Bass 1,Synth,Synth bass with filter sweep
+0,39,Synth Bass 2,Synth,Bright synth bass
+0,40,Violin,Strings,Bright violin
+0,41,Viola,Strings,Warm viola
+0,42,Cello,Strings,Deep cello
+0,43,Contrabass,Strings,Deep double bass
+0,44,Tremolo Strings,Strings,Strings with tremolo effect
+0,45,Pizzicato Strings,Strings,Plucked string sound
+0,46,Orchestral Harp,Plucked,Orchestral harp glissandos
+0,47,Timpani,Percussion,Kettle drum
+0,48,String Ensemble 1,Strings,Warm string ensemble
+0,49,String Ensemble 2,Strings,Bright string ensemble
+0,50,Synth Strings 1,Synth,Synth pad string sound
+0,51,Synth Strings 2,Synth,Bright synth strings
+0,52,Choir Aahs,Vocal,Choir with "aah" vowel
+0,53,Choir Oohs,Vocal,Choir with "ooh" vowel
+0,54,Synth Voice,Vocal,Synth pad vocal
+0,55,Orchestra Hit,Synth,Bright orchestral hit
+0,56,Trumpet,Brass,Bright trumpet
+0,57,Trombone,Brass,Warm trombone
+0,58,Tuba,Brass,Deep tuba
+0,59,Muted Trumpet,Brass,Muted trumpet with harmon
+0,60,French Horn,Brass,Warm French horn
+0,61,Brass Section,Brass,Bright brass section
+0,62,Synth Brass 1,Synth,Synth brass with filter
+0,63,Synth Brass 2,Synth,Bright synth brass
+0,64,Soprano Saxophone,Woodwind,High soprano sax
+0,65,Alto Saxophone,Woodwind,Warm alto sax
+0,66,Tenor Saxophone,Woodwind,Rich tenor sax
+0,67,Baritone Saxophone,Woodwind,Deep baritone sax
+0,68,Oboe,Woodwind,Bright oboe
+0,69,English Horn,Woodwind,Warm English horn
+0,70,Bassoon,Woodwind,Deep bassoon
+0,71,Clarinet,Woodwind,Bright clarinet
+0,72,Piccolo,Woodwind,High-pitched piccolo
+0,73,Flute,Woodwind,Warm flute
+0,74,Recorder,Woodwind,Soft recorder
+0,75,Pan Flute,Woodwind,Pan flute with resonance
+0,76,Blown Bottle,Wind,Blown bottle sound
+0,77,Shakuhachi,Wind,Japanese bamboo flute
+0,78,Whistle,Wind,Bright whistle
+0,79,Ocarina,Wind,Soft ocarina
+0,80,Lead 1 (square),Synth,Square wave synth lead
+0,81,Lead 2 (sawtooth),Synth,Sawtooth wave synth lead
+0,82,Lead 3 (calliope),Synth,Calliope-style synth
+0,83,Lead 4 (chiff),Synth,Chiff attack synth
+0,84,Lead 5 (charang),Synth,Charang-style synth
+0,85,Lead 6 (voice),Synth,Voice-like synth
+0,86,Lead 7 (fifths),Synth,Fifth-interval synth
+0,87,Lead 8 (bass+lead),Synth,Bass with lead synth
+0,88,Pad 1 (new age),Synth,Warm new age pad
+0,89,Pad 2 (warm),Synth,Warm synth pad
+0,90,Pad 3 (polysynth),Synth,Polyphonic synth pad
+0,91,Pad 4 (choir),Synth,Choir-like pad
+0,92,Pad 5 (bowed),Synth,Bowed glass pad
+0,93,Pad 6 (metallic),Synth,Metallic pad
+0,94,Pad 7 (halo),Synth,Halo-like pad
+0,95,Pad 8 (sweep),Synth,Sweep filter pad
+0,96,FX 1 (rain),FX,Rain-like effect
+0,97,FX 2 (soundtrack),FX,Soundtrack-style effect
+0,98,FX 3 (crystal),FX,Crystal bell effect
+0,99,FX 4 (atmosphere),FX,Atmospheric effect
+0,100,FX 5 (brightness),FX,Bright sparkling effect
+0,101,FX 6 (goblins),FX,Goblin-like effect
+0,102,FX 7 (echoes),FX,Echo-like effect
+0,103,FX 8 (sci-fi),FX,Sci-fi sound effect
+0,104,Sitar,Plucked,Indian sitar with resonance
+0,105,Banjo,Plucked,Banjo with bright attack
+0,106,Shamisen,Plucked,Japanese three sitar with resonance
+0,105,Banjo,Plucked,Banjo with bright attack
+0,106,Shamisen,Plucked,Japanese three-string lute
+0,107,Koto,Plucked,Japanese zither
+0,108,Kalimba,Plucked,African thumb piano
+0,109,Bagpipe,Wind,Scottish bagpipe
+0,110,Fiddle,Strings,Fiddle with bright attack
+0,111,Shanai,Wind,Indian double-reed wind
+0,112,Tinkle Bell,Mallet,Bright tinkling bell
+0,113,Agogo,Percussion,Brazilian metal bells
+0,114,Steel Drums,Percussion,Steel drum pan
+0,115,Woodblock,Percussion,Wooden percussion block
+0,116,Taiko Drum,Percussion,Japanese taiko drum
+0,117,Melodic Tom,Percussion,Tuned tom-tom drums
+0,118,Synth Drum,Percussion,Synth percussion
+0,119,Reverse Cymbal,Percussion,Reversed cymbal effect
+0,120,Guitar Fret Noise,Percussion,Guitar fret sliding noise
+0,121,Breath Noise,Wind,Breath attack noise
+0,122,Seashore,FX,Ocean wave sounds
+0,123,Bird Tweet,FX,Bird chirping sounds
+0,124,Telephone Ring,FX,Telephone ringing
+0,125,Helicopter,FX,Helicopter rotor sounds
+0,126,Applause,FX,Audience applause
+0,127,Gunshot,FX,Gunshot sound effect
+120,0,Acoustic Bass Drum,Drum,Deep bass drum (Kick)
+120,1,Bass Drum 1,Drum,Bass drum variant
+120,6,Side Stick,Drum,Side stick click
+120,7,Acoustic Snare,Drum,Bright snare drum
+120,8,Hand Clap,Drum,Hand clap sound
+120,10,Electric Snare,Drum,Electric snare
+120,11,Low

@@ -1,0 +1,48 @@
+note,drum_name,category
+35,Acoustic Bass Drum,Kick
+36,Bass Drum 1,Kick
+37,Side Stick,Snare
+38,Acoustic Snare,Snare
+39,Hand Clap,Snare
+40,Electric Snare,Snare
+41,Low Floor Tom,Tom
+42,Closed Hi-Hat,Hi-Hat
+43,High Floor Tom,Tom
+44,Pedal Hi-Hat,Hi-Hat
+45,Low Tom,Tom
+46,Open Hi-Hat,Hi-Hat
+47,Low-Mid Tom,Tom
+48,High-Mid Tom,Tom
+49,Crash Cymbal 1,Cymbal
+50,High Tom,Tom
+51,Ride Cymbal 1,Cymbal
+52,Chinese Cymbal,Cymbal
+53,Ride Bell,Cymbal
+54,Tambourine,Percussion
+55,Splash Cymbal,Cymbal
+56,Cowbell,Percussion
+57,Crash Cymbal 2,Cymbal
+58,Vibraslap,Percussion
+59,Ride Cymbal 2,Cymbal
+60,High Bongo,Percussion
+61,Low Bongo,Percussion
+62,Mute High Conga,Percussion
+63,Open High Conga,Percussion
+64,Low Conga,Percussion
+65,High Timbale,Percussion
+66,Low Timbale,Percussion
+67,High Agogo,Percussion
+68,Low Agogo,Percussion
+69,Cabasa,Percussion
+70,Maracas,Percussion
+71,Short Whistle,Percussion
+72,Long Whistle,Percussion
+73,Short Guiro,Percussion
+74,Long Guiro,Percussion
+75,Claves,Percussion
+76,High Woodblock,Percussion
+77,Low Woodblock,Percussion
+78,Mute Cuica,Percussion
+79,Open Cuica,Percussion
+80,Mute Triangle,Percussion
+81,Open Triangle,Percussion
