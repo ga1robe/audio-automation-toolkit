@@ -3,10 +3,15 @@
 # Zatrzymanie skryptu w przypadku błędu
 set -e
 
-HUB_DIR="$HOME/AudioEngineeringHub"
-cd "$HUB_DIR"
+# Ścieżki
+TOOLKIT_DIR="/home/robert/Muzyka/Devs/audio-automation-toolkit"
+ASSET_PACKS_DIR="/home/robert/Muzyka/Asset-packs"
+WORK_BRANCH="docker-vscode"
+RELEASE_BRANCH="asset-packs-release" # Nazwa gałęzi na GitHubie przeznaczonej na paczki
 
-/bin/echo "=== [Audio Engineering Hub] Rozpoczynanie synchronizacji git ==="
+cd "$TOOLKIT_DIR"
+
+/bin/echo "=== [Audio Toolkit Sync] Rozpoczynanie procedury synchronizacji ==="
 
 # Sprawdzenie statusu repozytorium
 /usr/bin/git status
