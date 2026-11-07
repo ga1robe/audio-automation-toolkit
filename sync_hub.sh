@@ -32,6 +32,6 @@ fi
 
 # Wypchnięcie zmian do zdalnego repozytorium (np. GitHub)
 /bin/echo "Wysyłanie zmian do zdalnego repozytorium..."
-/usr/bin/git push origin main
+/usr/bin/git push origin docker-vscode
 
 /bin/echo "=== Synchronizacja zakończona pomyślnie! ==="
