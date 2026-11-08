@@ -46,6 +46,8 @@ To run the project, you need:
 
 Basic Pitch, Whisper, and source separation can require significant hardware resources. For longer recordings, use a machine with more RAM or a GPU configured for the relevant libraries.
 
+The Docker images use the digest-pinned `pytorch/pytorch:2.8.0-cuda12.6-cudnn9-runtime` base and Python 3.11. The base, TensorFlow, and ASR virtual environments install their separately pinned dependencies from `requirements/`. Dependency downloads use a persistent BuildKit cache and extended pip timeouts/retries to make large wheel downloads more reliable across builds. To use an NVIDIA GPU, install the NVIDIA Container Toolkit on the host and pass `--gpus all` to `docker run`; the container image does not include host GPU drivers.
+
 ## Project structure
 
 ```text
@@ -97,6 +99,16 @@ docker run --rm -it \
   /app/data/output_results
 ```
 
+## Process a batch with Docker Compose
+
+Put audio files in `./input` and run the following from the project root. Compose builds the image if needed, processes the full batch, and writes results to `./output`:
+
+```/bin/bash
+docker compose run --build --rm audio-toolkit
+```
+
+The input folder is mounted read-only. The output folder is mounted for writing.
+
 ### Defaults
 
 - Stem separation: 6 stems using `htdemucs_6s`.
@@ -120,12 +132,20 @@ docker run --rm -it \
 The report includes:
 
 - processed files,
+- each source file's SHA-256 checksum, duration, sample rate, and channel count,
 - output locations,
-- audio analysis,
+- audio analysis, including BPM and detected key/tonality,
+- Demucs, Basic Pitch, and Whisper package/model versions where each stage ran,
 - generated stems,
-- MIDI files,
-- transcription,
+- MIDI files and transcription text,
 - spectrograms, if enabled.
+- per-track and overall processing time, status, and warnings.
+
+Each track retains the existing `stems`, `midi`, `transcription`, and
+`spectrograms` fields. The `outputs` field also provides lists of generated
+stem, MIDI, and lyrics paths. Model package versions are read from the pinned
+requirements files used to build the corresponding environments; the selected
+model name is recorded separately.
 
 ## Vocal transcription
 

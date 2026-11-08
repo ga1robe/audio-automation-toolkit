@@ -5,14 +5,17 @@ Zarządza potokiem przetwarzania: Separacja -> Analiza -> Konwersja MIDI / ASR -
 """
 
 import argparse
+import hashlib
 import json
 import os
+import re
 import shlex
 import signal
 import sys
 import shutil
 import subprocess
 import tempfile
+import time
 import wave
 from pathlib import Path
 
@@ -26,6 +29,7 @@ DEMUCS_STEM_NAMES = {
     4: {"vocals.wav", "drums.wav", "bass.wav", "other.wav"},
     6: {"vocals.wav", "drums.wav", "bass.wav", "other.wav", "guitar.wav", "piano.wav"},
 }
+REQUIREMENTS_DIR = PROJECT_DIR / "requirements"
 
 VENV_BASE = Path(
     os.environ.get("VENV_BASE", "/opt/venv311-base")
@@ -85,6 +89,46 @@ def normalize_asr_language(language: str | None) -> str | None:
         "au": "en",
     }
     return aliases.get(locale, normalized)
+
+
+def sha256_file(file_path: Path) -> str:
+    digest = hashlib.sha256()
+    with file_path.open("rb") as audio_file:
+        for chunk in iter(lambda: audio_file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def get_audio_metadata(file_path: Path) -> dict[str, float | int]:
+    from pydub.utils import mediainfo_json
+
+    media_info = mediainfo_json(str(file_path))
+    audio_stream = next(
+        stream for stream in media_info["streams"]
+        if stream.get("codec_type") == "audio"
+    )
+    duration = audio_stream.get("duration") or media_info["format"].get("duration")
+    if duration is None:
+        raise ValueError(f"Audio duration is unavailable for {file_path}")
+
+    return {
+        "duration_seconds": float(duration),
+        "sample_rate": int(audio_stream["sample_rate"]),
+        "channels": int(audio_stream["channels"]),
+    }
+
+
+def get_pinned_package_version(requirements_file: Path, package_name: str) -> str | None:
+    normalized_name = re.sub(r"[-_.]+", "-", package_name).lower()
+    with requirements_file.open("r", encoding="utf-8") as requirements:
+        for line in requirements:
+            requirement = line.strip()
+            if not requirement or requirement.startswith("#") or "==" not in requirement:
+                continue
+            name, version = requirement.split("==", 1)
+            if re.sub(r"[-_.]+", "-", name).lower() == normalized_name:
+                return version.strip()
+    return None
 
 
 def is_kernel_kill_exit(returncode: int) -> bool:
@@ -275,6 +319,7 @@ def run_process_pipeline(
     skip_asr: bool = False,
 ) -> dict:
     """Uruchamia potok przetwarzania audio dla wybranego etapu lub pełnej konfiguracji."""
+    pipeline_started_at = time.perf_counter()
     input_dir = input_dir.resolve()
     output_dir = output_dir.resolve()
     
@@ -316,6 +361,11 @@ def run_process_pipeline(
         )
     
     normalized_lang = normalize_asr_language(asr_language)
+    model_versions = {
+        "demucs": get_pinned_package_version(REQUIREMENTS_DIR / "base.all.txt", "demucs"),
+        "basic_pitch": get_pinned_package_version(REQUIREMENTS_DIR / "tf.all.txt", "basic-pitch"),
+        "whisper": get_pinned_package_version(REQUIREMENTS_DIR / "asr.all.txt", "openai-whisper"),
+    }
 
     execution_manifest = {
         "toolkit_version": "1.0.0",
@@ -326,10 +376,12 @@ def run_process_pipeline(
         "processed_files_count": len(audio_files),
         "results": [],
         "asr_language": normalized_lang,
+        "status": "success",
     }
     
     write_absolute_paths_bool = False
     for audio_path in audio_files:
+        track_started_at = time.perf_counter()
         track_name = audio_path.stem
         track_out_dir = output_dir / track_name
         stems_dir = track_out_dir / "stems"
@@ -337,19 +389,60 @@ def run_process_pipeline(
         asr_dir = track_out_dir / "asr"
         spectro_dir = track_out_dir / "spectrograms" if spectro_bool else None
         
+        warnings: list[str] = []
+        logs: list[dict[str, str]] = []
+        try:
+            source_metadata: dict[str, float | int] | None = get_audio_metadata(audio_path)
+        except (OSError, RuntimeError, ValueError, KeyError, StopIteration) as exc:
+            source_metadata = None
+            warnings.append(f"Could not read source audio metadata: {exc}")
+            logs.append({"level": "warning", "message": warnings[-1]})
+
         track_manifest = {
             "file_name": audio_path.name,
             "original_path": str(audio_path) if write_absolute_paths_bool else os.path.relpath(audio_path, output_dir),
+            "source_file": audio_path.name,
+            "checksum": sha256_file(audio_path),
+            "checksum_algorithm": "sha256",
+            "duration_seconds": source_metadata["duration_seconds"] if source_metadata else None,
+            "sample_rate": source_metadata["sample_rate"] if source_metadata else None,
+            "channels": source_metadata["channels"] if source_metadata else None,
             "analysis": {},
             "stems": {},
             "midi": {},
             "transcription": None,
-            "spectrograms": {} if spectro_bool else None
+            "spectrograms": {} if spectro_bool else None,
+            "models": {
+                "demucs": {
+                    "package_version": model_versions["demucs"],
+                    "model": None,
+                },
+                "basic_pitch": {
+                    "package_version": model_versions["basic_pitch"],
+                    "model": "ICASSP_2022" if stage in {"full", "tf"} else None,
+                },
+                "whisper": {
+                    "package_version": model_versions["whisper"],
+                    "model": (
+                        asr_model
+                        if stage in {"full", "asr"} and not skip_asr
+                        else None
+                    ),
+                },
+            },
+            "warnings": warnings,
+            "logs": logs,
+            "status": "processing",
         }
 
         if stage in {"full", "base"}:
             # 1. Separate audio with Demucs.
-            run_demucs_with_fallback(audio_path, stems_dir, stems_count, debug_steps)
+            actual_stems_count = run_demucs_with_fallback(
+                audio_path, stems_dir, stems_count, debug_steps
+            )
+            track_manifest["models"]["demucs"]["model"] = (
+                "htdemucs_6s" if actual_stems_count == 6 else "htdemucs"
+            )
 
             short_actual_stems_path_bool = True
             actual_stems_path = stems_dir / track_name
@@ -388,6 +481,13 @@ def run_process_pipeline(
             except subprocess.CalledProcessError as exc:
                 print(f"Analiza zakończyła się kodem: {exc.returncode}", file=sys.stderr)
                 print(f"Polecenie: {exc.cmd}", file=sys.stderr)
+                track_manifest["status"] = "failed"
+                track_manifest["warnings"].append(
+                    f"Audio analysis failed with exit code {exc.returncode}"
+                )
+                track_manifest["logs"].append(
+                    {"level": "warning", "message": track_manifest["warnings"][-1]}
+                )
 
             if analysis_json_path.exists():
                 with open(analysis_json_path, "r", encoding="utf-8") as jf:
@@ -497,10 +597,47 @@ def run_process_pipeline(
                         file=sys.stderr,
                         flush=True,
                     )
+                    track_manifest["warnings"].append(
+                        f"Spectrogram generation failed for {stem_file.name} "
+                        f"(exit code {exc.returncode})"
+                    )
+                    track_manifest["logs"].append(
+                        {"level": "warning", "message": track_manifest["warnings"][-1]}
+                    )
                 else:
                     track_manifest["spectrograms"][stem_type] = str(out_spectro) if write_absolute_paths_bool else os.path.relpath(out_spectro, track_out_dir)
+        analysis_data = track_manifest["analysis"]
+        if isinstance(analysis_data, list):
+            analysis_data = next(
+                (item for item in analysis_data if isinstance(item, dict)), {}
+            )
+        if isinstance(analysis_data, dict):
+            analysis_data["bpm"] = analysis_data.get("tempo")
+            analysis_data["key"] = analysis_data.get("tonality")
+        track_manifest["outputs"] = {
+            "stems": list(track_manifest["stems"].values()),
+            "midi": list(track_manifest["midi"].values()),
+            "lyrics": (
+                [track_manifest["transcription"]["txt"]]
+                if track_manifest["transcription"]
+                else []
+            ),
+        }
+        track_manifest["processing_time_seconds"] = round(
+            time.perf_counter() - track_started_at, 3
+        )
+        if track_manifest["status"] == "processing":
+            track_manifest["status"] = "success"
+        track_manifest["logs"].append(
+            {"level": "info", "message": f"Processing finished with status: {track_manifest['status']}"}
+        )
+        if track_manifest["status"] == "failed":
+            execution_manifest["status"] = "failed"
         execution_manifest["results"].append(track_manifest)
 
+    execution_manifest["processing_time_seconds"] = round(
+        time.perf_counter() - pipeline_started_at, 3
+    )
     return execution_manifest
 
 def main():

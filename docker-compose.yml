@@ -1,0 +1,10 @@
+services:
+  audio-toolkit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    volumes:
+      - ./input:/app/input:ro
+      - ./output:/app/output
+    command: ["--stage", "full", "/app/input", "/app/output"]
