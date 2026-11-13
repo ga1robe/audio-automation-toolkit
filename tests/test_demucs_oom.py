@@ -137,6 +137,53 @@ def test_pipeline_runs_analysis_after_demucs_stems_are_ready(tmp_path):
     assert track_manifest["processing_time_seconds"] >= 0
 
 
+def test_pipeline_reuses_existing_stems_when_demucs_is_skipped(tmp_path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    (input_dir / "mix.wav").touch()
+    stems_dir = output_dir / "mix" / "stems"
+    stems_dir.mkdir(parents=True)
+    for stem_name in audio_toolkit.DEMUCS_STEM_NAMES[6]:
+        (stems_dir / stem_name).write_bytes(b"existing stem")
+
+    def fake_run(cmd, check):
+        assert check is True
+        if Path(cmd[1]).name == "analysis.py":
+            analysis_path = Path(cmd[cmd.index("--output") + 1])
+            analysis_path.write_text('{"tempo": 120}', encoding="utf-8")
+
+    with (
+        patch.object(
+            audio_toolkit,
+            "get_audio_metadata",
+            return_value={
+                "duration_seconds": 1.0,
+                "sample_rate": 44100,
+                "channels": 2,
+            },
+        ),
+        patch.object(audio_toolkit, "run_demucs_with_fallback") as run_demucs,
+        patch.object(audio_toolkit.subprocess, "run", side_effect=fake_run) as run,
+    ):
+        manifest = audio_toolkit.run_process_pipeline(
+            input_dir,
+            output_dir,
+            stage="base",
+            skip_asr=True,
+            skip_demucs=True,
+        )
+
+    run_demucs.assert_not_called()
+    assert run.call_count == 3
+    track_manifest = manifest["results"][0]
+    assert set(track_manifest["stems"]) == {
+        "vocals", "drums", "bass", "other", "guitar", "piano"
+    }
+    assert track_manifest["analysis"]["tempo"] == 120
+    assert track_manifest["models"]["demucs"]["model"] is None
+
+
 def test_pipeline_records_analysis_failure_in_manifest(tmp_path):
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
