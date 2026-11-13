@@ -195,6 +195,32 @@ def combine_demucs_stems(
                         combined.writeframesraw(frames)
 
 
+def get_existing_demucs_stems(stems_dir: Path) -> Path:
+    stem_files = {
+        path.name: path
+        for path in stems_dir.glob("*.wav")
+        if path.is_file()
+    }
+    stem_names = set(stem_files)
+
+    for stems_count in (6, 4):
+        if stem_names == DEMUCS_STEM_NAMES[stems_count]:
+            empty_stems = [
+                path.name for path in stem_files.values() if path.stat().st_size == 0
+            ]
+            if empty_stems:
+                raise RuntimeError(
+                    f"Cannot reuse empty stem files in {stems_dir}: "
+                    f"{sorted(empty_stems)}"
+                )
+            return stems_dir
+
+    raise RuntimeError(
+        f"Cannot reuse stems in {stems_dir}: found {sorted(stem_names)}; "
+        "expected the complete 4-stem or 6-stem Demucs set."
+    )
+
+
 def run_demucs_with_fallback(audio_path: Path, stems_dir: Path, stems_count: int, debug_steps: set[str] | None = None) -> int:
     if stems_count == 6:
         candidate_counts = [6, 4]
@@ -317,6 +343,7 @@ def run_process_pipeline(
     debug_steps: set[str] | None = None,
     stage: str = "full",
     skip_asr: bool = False,
+    skip_demucs: bool = False,
 ) -> dict:
     """Uruchamia potok przetwarzania audio dla wybranego etapu lub pełnej konfiguracji."""
     pipeline_started_at = time.perf_counter()
@@ -436,22 +463,30 @@ def run_process_pipeline(
         }
 
         if stage in {"full", "base"}:
-            # 1. Separate audio with Demucs.
-            actual_stems_count = run_demucs_with_fallback(
-                audio_path, stems_dir, stems_count, debug_steps
-            )
-            track_manifest["models"]["demucs"]["model"] = (
-                "htdemucs_6s" if actual_stems_count == 6 else "htdemucs"
-            )
+            if skip_demucs:
+                actual_stems_path = get_existing_demucs_stems(stems_dir)
+                print(
+                    f"[audio-toolkit][base] Reusing existing stems from "
+                    f"{actual_stems_path}; skipping Demucs.",
+                    flush=True,
+                )
+            else:
+                # 1. Separate audio with Demucs.
+                actual_stems_count = run_demucs_with_fallback(
+                    audio_path, stems_dir, stems_count, debug_steps
+                )
+                track_manifest["models"]["demucs"]["model"] = (
+                    "htdemucs_6s" if actual_stems_count == 6 else "htdemucs"
+                )
 
-            short_actual_stems_path_bool = True
-            actual_stems_path = stems_dir / track_name
-            if short_actual_stems_path_bool:
-                shutil.copytree(str(stems_dir / track_name),str(stems_dir), dirs_exist_ok=True)
-                shutil.rmtree(str(stems_dir / track_name), ignore_errors=False)
+                short_actual_stems_path_bool = True
                 actual_stems_path = stems_dir / track_name
-                if not actual_stems_path.exists():
-                    actual_stems_path = stems_dir
+                if short_actual_stems_path_bool:
+                    shutil.copytree(str(stems_dir / track_name),str(stems_dir), dirs_exist_ok=True)
+                    shutil.rmtree(str(stems_dir / track_name), ignore_errors=False)
+                    actual_stems_path = stems_dir / track_name
+                    if not actual_stems_path.exists():
+                        actual_stems_path = stems_dir
 
             if not actual_stems_path.is_dir():
                 raise RuntimeError(
@@ -667,6 +702,11 @@ def main():
         dest="skip_asr",
         help="Pomija transkrypcję ASR/Whisper.",
     )
+    parser.add_argument(
+        "--skip-demucs",
+        action="store_true",
+        help="Reuses existing complete stems from the output directory instead of running Demucs.",
+    )
     parser.add_argument("--model", type=str, default="small", help="Model Whisper (domyślnie: small)")
     parser.add_argument("--json-out", type=Path, help="Ścieżka zapisu zbiorczego raportu JSON")
     parser.add_argument('--spectro','--spectrogram',action='store_true')
@@ -701,6 +741,7 @@ def main():
         debug_steps=debug_steps,
         stage=args.stage,
         skip_asr=args.skip_asr,
+        skip_demucs=args.skip_demucs,
     )
     
     json_output = json.dumps(manifest, ensure_ascii=False, indent=2)
