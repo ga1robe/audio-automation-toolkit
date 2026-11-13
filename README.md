@@ -272,11 +272,29 @@ audio_toolkit.py INPUT OUTPUT [OPTIONS]
 | Option | Default | Description |
 |---|---:|---|
 | `--stems` | `6` | Number of stems to request; valid value: `6` |
+| `--skip-demucs` | disabled | Reuse existing stems in the output directory instead of separating again |
 | `--lang` | `en` | Transcription language |
 | `--model` | `small` | ASR model |
 | `--json-out` | none | Path for the consolidated JSON report |
 | `--spectro` | disabled | Generate spectrograms |
 | `--spectrogram` | disabled | Alias for `--spectro` |
+
+To rerun analysis and base-stage processing without separating the source again,
+reuse the complete stem set already present under the track's output directory:
+
+```/bin/bash
+docker run --rm -it \
+  -v "$(pwd)/data:/app/data" \
+  audio-automation-toolkit \
+  /app/data/input_audio \
+  /app/data/output_results \
+  --stage base \
+  --skip-demucs
+```
+
+The existing stems must be a complete 4-stem or 6-stem Demucs set under
+`OUTPUT/<track>/stems/`. The command still runs source analysis and the selected
+stage's remaining processing.
 
 To display help:
 
