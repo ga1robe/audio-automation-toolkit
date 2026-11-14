@@ -215,6 +215,13 @@ docker run --rm -it \
 
 The default is `6`. If Demucs is terminated by the operating system or exceeds the per-chunk timeout, the toolkit retries with the four-stem `htdemucs` model.
 
+## Large-stem heuristic processing
+
+Drum and bass stems larger than 200 MiB are decoded and processed in five-minute
+chunks to limit memory use. The toolkit applies the chunk start time when it
+merges the generated MIDI files, and removes temporary audio and MIDI chunks
+after processing. Smaller stems continue to use the normal single-process path.
+
 ## Output
 
 For an input file such as:
