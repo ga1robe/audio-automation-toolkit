@@ -25,6 +25,8 @@ DEMUCS_CHUNK_DURATION_MS = 5 * 60 * 1000
 DEMUCS_CHUNK_TIMEOUT_SECONDS = int(
     os.environ.get("DEMUCS_CHUNK_TIMEOUT_SECONDS", "900")
 )
+HEURISTICS_MAX_STEM_SIZE_BYTES = 200 * 1024 * 1024
+HEURISTICS_CHUNK_DURATION_MS = 5 * 60 * 1000
 DEMUCS_STEM_NAMES = {
     4: {"vocals.wav", "drums.wav", "bass.wav", "other.wav"},
     6: {"vocals.wav", "drums.wav", "bass.wav", "other.wav", "guitar.wav", "piano.wav"},
@@ -135,8 +137,17 @@ def is_kernel_kill_exit(returncode: int) -> bool:
     return returncode in (-signal.SIGKILL, signal.SIGKILL, 137, -137) or abs(returncode) == signal.SIGKILL
 
 
-def split_audio_into_chunks(audio_path: Path, chunks_dir: Path) -> list[Path]:
+def split_audio_into_chunks(
+    audio_path: Path,
+    chunks_dir: Path,
+    chunk_duration_ms: int | None = None,
+) -> list[Path]:
     from pydub import AudioSegment
+
+    if chunk_duration_ms is None:
+        chunk_duration_ms = DEMUCS_CHUNK_DURATION_MS
+    if chunk_duration_ms <= 0:
+        raise ValueError("Audio chunk duration must be greater than zero.")
 
     chunks_dir.mkdir(parents=True, exist_ok=True)
     chunks = []
@@ -146,7 +157,7 @@ def split_audio_into_chunks(audio_path: Path, chunks_dir: Path) -> list[Path]:
         segment = AudioSegment.from_file(
             str(audio_path),
             start_second=start_ms / 1000,
-            duration=DEMUCS_CHUNK_DURATION_MS / 1000,
+            duration=chunk_duration_ms / 1000,
         )
         segment_duration_ms = len(segment)
         if segment_duration_ms == 0:
@@ -157,14 +168,142 @@ def split_audio_into_chunks(audio_path: Path, chunks_dir: Path) -> list[Path]:
         del segment
         chunks.append(chunk_path)
 
-        if segment_duration_ms < DEMUCS_CHUNK_DURATION_MS:
+        if segment_duration_ms < chunk_duration_ms:
             break
-        start_ms += DEMUCS_CHUNK_DURATION_MS
+        start_ms += chunk_duration_ms
 
     if not chunks:
         raise RuntimeError(f"Nie udało się odczytać audio z pliku: {audio_path}")
 
     return chunks
+
+
+def merge_midi_chunks(
+    midi_paths: list[Path],
+    output_path: Path,
+    chunk_duration_ms: int,
+    tempo_bpm: float,
+) -> None:
+    import mido
+
+    if not midi_paths:
+        raise ValueError("At least one MIDI chunk is required.")
+    if chunk_duration_ms <= 0 or tempo_bpm <= 0:
+        raise ValueError("Chunk duration and tempo must be greater than zero.")
+
+    source_midis = [mido.MidiFile(path) for path in midi_paths]
+    ticks_per_beat = source_midis[0].ticks_per_beat
+    track_count = len(source_midis[0].tracks)
+    if track_count == 0:
+        raise RuntimeError("Heuristics produced MIDI chunks with no tracks.")
+    if any(
+        midi.ticks_per_beat != ticks_per_beat
+        or len(midi.tracks) != track_count
+        for midi in source_midis
+    ):
+        raise RuntimeError("Heuristics produced incompatible MIDI chunks.")
+
+    merged = mido.MidiFile(type=1, ticks_per_beat=ticks_per_beat)
+    tempo_microseconds = int(round(60_000_000 / tempo_bpm))
+
+    for track_index in range(track_count):
+        events: list[tuple[int, int, int, object]] = []
+        for chunk_index, midi in enumerate(source_midis):
+            offset_ticks = round(
+                mido.second2tick(
+                    chunk_index * chunk_duration_ms / 1000,
+                    ticks_per_beat,
+                    tempo_microseconds,
+                )
+            )
+            absolute_tick = 0
+            for event_index, message in enumerate(midi.tracks[track_index]):
+                absolute_tick += message.time
+                if message.type != "end_of_track":
+                    events.append(
+                        (
+                            absolute_tick + offset_ticks,
+                            chunk_index,
+                            event_index,
+                            message,
+                        )
+                    )
+
+        track = mido.MidiTrack()
+        previous_tick = 0
+        for absolute_tick, _, _, message in sorted(
+            events, key=lambda event: event[:3]
+        ):
+            track.append(message.copy(time=absolute_tick - previous_tick))
+            previous_tick = absolute_tick
+        track.append(mido.MetaMessage("end_of_track", time=0))
+        merged.tracks.append(track)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    merged.save(str(output_path))
+
+
+def run_heuristics_with_chunking(
+    heuristic_type: str,
+    stem_file: Path,
+    output_midi: Path,
+    tempo_bpm: float,
+    debug_steps: set[str] | None = None,
+) -> None:
+    if heuristic_type not in {"drums", "bass"}:
+        raise ValueError(f"Unsupported heuristic type: {heuristic_type}")
+
+    heuristic_script = PROJECT_DIR / "src/modules/heuristics.py"
+    output_midi.parent.mkdir(parents=True, exist_ok=True)
+    if stem_file.stat().st_size <= HEURISTICS_MAX_STEM_SIZE_BYTES:
+        cmd = [
+            str(VENV_BASE), str(heuristic_script),
+            "--type", heuristic_type,
+            "--input", str(stem_file),
+            "--output", str(output_midi),
+            "--tempo", str(tempo_bpm),
+        ]
+        log_command("base", cmd, debug_steps)
+        subprocess.run(cmd, check=True)
+        return
+
+    with tempfile.TemporaryDirectory(
+        prefix="heuristics_chunks_",
+        dir=output_midi.parent,
+    ) as temp_dir_name:
+        temp_dir = Path(temp_dir_name)
+        chunk_paths = split_audio_into_chunks(
+            stem_file,
+            temp_dir / "audio_chunks",
+            chunk_duration_ms=HEURISTICS_CHUNK_DURATION_MS,
+        )
+        midi_chunk_paths = []
+        for chunk_index, chunk_path in enumerate(chunk_paths):
+            chunk_midi_path = temp_dir / "midi_chunks" / f"chunk_{chunk_index:06d}.mid"
+            cmd = [
+                str(VENV_BASE), str(heuristic_script),
+                "--type", heuristic_type,
+                "--input", str(chunk_path),
+                "--output", str(chunk_midi_path),
+                "--tempo", str(tempo_bpm),
+            ]
+            print(
+                f"[audio-toolkit][base] Processing {heuristic_type} stem chunk "
+                f"{chunk_index + 1}/{len(chunk_paths)}.",
+                flush=True,
+            )
+            log_command("base", cmd, debug_steps)
+            subprocess.run(cmd, check=True)
+            midi_chunk_paths.append(chunk_midi_path)
+
+        merged_midi_path = temp_dir / "merged.mid"
+        merge_midi_chunks(
+            midi_chunk_paths,
+            merged_midi_path,
+            chunk_duration_ms=HEURISTICS_CHUNK_DURATION_MS,
+            tempo_bpm=tempo_bpm,
+        )
+        os.replace(merged_midi_path, output_midi)
 
 
 def combine_demucs_stems(
@@ -583,24 +722,16 @@ def run_process_pipeline(
             elif "drum" in stem_type and stage in {"full", "base"}:
                 # Heurystyka perkusyjna
                 out_midi = midi_dir / f"drums.mid"
-                cmd_drums = [
-                    str(VENV_BASE), str(PROJECT_DIR / "src/modules/heuristics.py"),
-                    "--type", "drums", "--input", str(stem_file), "--output", str(out_midi),
-                    "--tempo", str(detected_tempo)
-                ]
-                log_command("base", cmd_drums, debug_steps)
-                subprocess.run(cmd_drums, check=True)
+                run_heuristics_with_chunking(
+                    "drums", stem_file, out_midi, detected_tempo, debug_steps
+                )
                 track_manifest["midi"]["drums"] = str(out_midi) if write_absolute_paths_bool else os.path.relpath(out_midi, track_out_dir)
             elif "bass" in stem_type and stage in {"full", "base"}:
                 # Heurystyka basowa
                 out_midi = midi_dir / f"bass.mid"
-                cmd_bass = [
-                    str(VENV_BASE), str(PROJECT_DIR / "src/modules/heuristics.py"),
-                    "--type", "bass", "--input", str(stem_file), "--output", str(out_midi),
-                    "--tempo", str(detected_tempo)
-                ]
-                log_command("base", cmd_bass, debug_steps)
-                subprocess.run(cmd_bass, check=True)
+                run_heuristics_with_chunking(
+                    "bass", stem_file, out_midi, detected_tempo, debug_steps
+                )
                 track_manifest["midi"]["bass"] = str(out_midi) if write_absolute_paths_bool else os.path.relpath(out_midi, track_out_dir)
             elif stage in {"full", "tf"}:
                 # Basic Pitch (Melodia / Inne)
