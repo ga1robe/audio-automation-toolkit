@@ -182,6 +182,19 @@ def test_pipeline_reuses_existing_stems_when_demucs_is_skipped(tmp_path):
     }
     assert track_manifest["analysis"]["tempo"] == 120
     assert track_manifest["models"]["demucs"]["model"] is None
+    skipped_basic_pitch = {
+        entry["message"]
+        for entry in track_manifest["logs"]
+        if entry["level"] == "info"
+    }
+    assert (
+        "Basic Pitch MIDI skipped for vocals.wav: pipeline stage 'base' "
+        "does not include Basic Pitch."
+    ) in skipped_basic_pitch
+    assert (
+        "Basic Pitch MIDI skipped for guitar.wav: pipeline stage 'base' "
+        "does not include Basic Pitch."
+    ) in skipped_basic_pitch
 
 
 def test_pipeline_records_analysis_failure_in_manifest(tmp_path):
