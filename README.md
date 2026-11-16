@@ -278,6 +278,7 @@ audio_toolkit.py INPUT OUTPUT [OPTIONS]
 
 | Option | Default | Description |
 |---|---:|---|
+| `--stage` | `full` | Pipeline stage: `base`, `tf`, `asr`, or `full` |
 | `--stems` | `6` | Number of stems to request; valid value: `6` |
 | `--skip-demucs` | disabled | Reuse existing stems in the output directory instead of separating again |
 | `--lang` | `en` | Transcription language |
@@ -303,6 +304,11 @@ The existing stems must be a complete 4-stem or 6-stem Demucs set under
 `OUTPUT/<track>/stems/`. The command still runs source analysis and the selected
 stage's remaining processing.
 
+The `base` stage generates heuristic MIDI for bass and drums, but does not run
+Basic Pitch; its manifest logs this for stems without MIDI. Basic Pitch MIDI is
+generated in the `full` and `tf` stages. Large stems are split into five-minute
+chunks for Basic Pitch conversion, then the MIDI chunks are merged.
+
 To display help:
 
 ```/bin/bash
@@ -322,7 +328,8 @@ For each audio file, the toolkit:
 7. Converts the vocal stem to MIDI.
 8. Converts drums to MIDI using heuristics.
 9. Converts bass to MIDI using heuristics.
-10. Converts the remaining stems to MIDI.
+10. Converts the remaining stems to MIDI with Basic Pitch. Large stems are
+    processed in five-minute chunks, with the MIDI chunks merged afterward.
 11. Optionally generates spectrograms.
 12. Saves the JSON report.
 
