@@ -27,6 +27,8 @@ DEMUCS_CHUNK_TIMEOUT_SECONDS = int(
 )
 HEURISTICS_MAX_STEM_SIZE_BYTES = 200 * 1024 * 1024
 HEURISTICS_CHUNK_DURATION_MS = 5 * 60 * 1000
+BASIC_PITCH_MAX_STEM_SIZE_BYTES = 200 * 1024 * 1024
+BASIC_PITCH_CHUNK_DURATION_MS = 5 * 60 * 1000
 DEMUCS_STEM_NAMES = {
     4: {"vocals.wav", "drums.wav", "bass.wav", "other.wav"},
     6: {"vocals.wav", "drums.wav", "bass.wav", "other.wav", "guitar.wav", "piano.wav"},
@@ -302,6 +304,60 @@ def run_heuristics_with_chunking(
             merged_midi_path,
             chunk_duration_ms=HEURISTICS_CHUNK_DURATION_MS,
             tempo_bpm=tempo_bpm,
+        )
+        os.replace(merged_midi_path, output_midi)
+
+
+def run_basic_pitch_with_chunking(
+    stem_file: Path,
+    output_midi: Path,
+    debug_steps: set[str] | None = None,
+) -> None:
+    basic_pitch_script = PROJECT_DIR / "src/modules/conversion_basicpitch.py"
+    output_midi.parent.mkdir(parents=True, exist_ok=True)
+    if stem_file.stat().st_size <= BASIC_PITCH_MAX_STEM_SIZE_BYTES:
+        cmd = [
+            str(VENV_TF), str(basic_pitch_script),
+            str(stem_file), str(output_midi),
+        ]
+        log_command("tf", cmd, debug_steps)
+        subprocess.run(cmd, check=True)
+        return
+
+    with tempfile.TemporaryDirectory(
+        prefix="basic_pitch_chunks_",
+        dir=output_midi.parent,
+    ) as temp_dir_name:
+        temp_dir = Path(temp_dir_name)
+        chunk_paths = split_audio_into_chunks(
+            stem_file,
+            temp_dir / "audio_chunks",
+            chunk_duration_ms=BASIC_PITCH_CHUNK_DURATION_MS,
+        )
+        midi_chunk_paths = []
+        for chunk_index, chunk_path in enumerate(chunk_paths):
+            chunk_midi_path = (
+                temp_dir / "midi_chunks" / f"chunk_{chunk_index:06d}.mid"
+            )
+            cmd = [
+                str(VENV_TF), str(basic_pitch_script),
+                str(chunk_path), str(chunk_midi_path),
+            ]
+            print(
+                f"[audio-toolkit][tf] Processing Basic Pitch stem chunk "
+                f"{chunk_index + 1}/{len(chunk_paths)}.",
+                flush=True,
+            )
+            log_command("tf", cmd, debug_steps)
+            subprocess.run(cmd, check=True)
+            midi_chunk_paths.append(chunk_midi_path)
+
+        merged_midi_path = temp_dir / "merged.mid"
+        merge_midi_chunks(
+            midi_chunk_paths,
+            merged_midi_path,
+            chunk_duration_ms=BASIC_PITCH_CHUNK_DURATION_MS,
+            tempo_bpm=120.0,
         )
         os.replace(merged_midi_path, output_midi)
 
@@ -709,17 +765,7 @@ def run_process_pipeline(
                     "srt": str(asr_dir / f"{stem_file.stem}.srt") if write_absolute_paths_bool else os.path.relpath(str(asr_dir / f"{stem_file.stem}.srt"), track_out_dir)
                 }
 
-            if stem_type in ["vocals", "vocal"] and stage in {"full", "tf"}:
-                # Basic Pitch (Melodia / Inne)
-                out_midi = midi_dir / f"{stem_type}.mid"
-                cmd_bp = [
-                    str(VENV_TF), str(PROJECT_DIR / "src/modules/conversion_basicpitch.py"),
-                    str(stem_file), str(out_midi)
-                ]
-                log_command("tf", cmd_bp, debug_steps)
-                subprocess.run(cmd_bp, check=True)
-                track_manifest["midi"][stem_type] = str(out_midi) if write_absolute_paths_bool else os.path.relpath(out_midi, track_out_dir)
-            elif "drum" in stem_type and stage in {"full", "base"}:
+            if "drum" in stem_type and stage in {"full", "base"}:
                 # Heurystyka perkusyjna
                 out_midi = midi_dir / f"drums.mid"
                 run_heuristics_with_chunking(
@@ -734,15 +780,34 @@ def run_process_pipeline(
                 )
                 track_manifest["midi"]["bass"] = str(out_midi) if write_absolute_paths_bool else os.path.relpath(out_midi, track_out_dir)
             elif stage in {"full", "tf"}:
-                # Basic Pitch (Melodia / Inne)
                 out_midi = midi_dir / f"{stem_type}.mid"
-                cmd_bp = [
-                    str(VENV_TF), str(PROJECT_DIR / "src/modules/conversion_basicpitch.py"),
-                    str(stem_file), str(out_midi)
-                ]
-                log_command("tf", cmd_bp, debug_steps)
-                subprocess.run(cmd_bp, check=True)
-                track_manifest["midi"][stem_type] = str(out_midi) if write_absolute_paths_bool else os.path.relpath(out_midi, track_out_dir)
+                out_midi.unlink(missing_ok=True)
+                try:
+                    run_basic_pitch_with_chunking(
+                        stem_file, out_midi, debug_steps
+                    )
+                except subprocess.CalledProcessError as exc:
+                    out_midi.unlink(missing_ok=True)
+                    message = (
+                        f"Basic Pitch MIDI generation failed for {stem_file.name} "
+                        f"(exit code {exc.returncode})"
+                    )
+                    print(f"[audio-toolkit][tf] {message}.", file=sys.stderr, flush=True)
+                    track_manifest["status"] = "failed"
+                    track_manifest["warnings"].append(message)
+                    track_manifest["logs"].append(
+                        {"level": "warning", "message": message}
+                    )
+                else:
+                    track_manifest["midi"][stem_type] = str(out_midi) if write_absolute_paths_bool else os.path.relpath(out_midi, track_out_dir)
+            else:
+                message = (
+                    f"Basic Pitch MIDI skipped for {stem_file.name}: "
+                    f"pipeline stage '{stage}' does not include Basic Pitch."
+                )
+                track_manifest["logs"].append(
+                    {"level": "info", "message": message}
+                )
 
             if spectro_bool and stage in {"full", "base"}:
                 spectro_dir.mkdir(parents=True, exist_ok=True)
