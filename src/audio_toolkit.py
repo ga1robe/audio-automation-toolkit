@@ -849,7 +849,7 @@ def run_process_pipeline(
             "stems": list(track_manifest["stems"].values()),
             "midi": list(track_manifest["midi"].values()),
             "lyrics": (
-                [track_manifest["transcription"]["txt"]]
+                list(track_manifest["transcription"].values())
                 if track_manifest["transcription"]
                 else []
             ),
