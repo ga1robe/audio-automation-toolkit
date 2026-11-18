@@ -7,9 +7,17 @@ import librosa
 import librosa.display
 #import tkinter as tk
 from pathlib import Path
+from tempfile import TemporaryDirectory
+
 import matplotlib.pyplot as plt
 
-def analyze_audio(file_path: str, spectrogram_path: str = None) -> dict:
+from splitter import split_dj_set_by_silence
+
+
+def _analyze_audio_file(
+    file_path: str,
+    spectrogram_path: str | None = None,
+) -> dict:
     """Wczytuje plik audio i zwraca podstawowe metadane oraz zapisuje spektrogram."""
     y, sr = librosa.load(file_path, sr=None, mono=True)
     
@@ -67,8 +75,42 @@ def analyze_audio(file_path: str, spectrogram_path: str = None) -> dict:
         #"spectrogram_png": spec_info,
         "bass_estimate": bass_estimate
     }
+
+
+def analyze_audio(
+    file_path: str,
+    spectrogram_path: str | None = None,
+) -> dict | list[dict]:
+    """Analyze silence-separated, duration-capped chunks of the source audio."""
+    source_path = Path(file_path)
+    with TemporaryDirectory(prefix="audio-analysis-") as temp_dir:
+        chunk_paths = split_dj_set_by_silence(source_path, Path(temp_dir))
+        analyses: list[dict] = []
+
+        for index, chunk_path in enumerate(chunk_paths, start=1):
+            chunk_spectrogram_path = None
+            if spectrogram_path:
+                output_path = Path(spectrogram_path)
+                chunk_spectrogram_path = str(
+                    output_path.with_name(
+                        f"{output_path.stem}.segment_{index:02d}{output_path.suffix}"
+                    )
+                    if len(chunk_paths) > 1
+                    else output_path
+                )
+
+            result = _analyze_audio_file(
+                str(chunk_path),
+                chunk_spectrogram_path,
+            )
+            result["file"] = source_path.name
+            if len(chunk_paths) > 1:
+                result["segment"] = chunk_path.name
+            analyses.append(result)
+
+    return analyses[0] if len(analyses) == 1 else analyses
     
-def show_window(results: dict) -> None:
+def show_window(results: dict | list[dict]) -> None:
     """Wyświetla wyniki w oknie Tkinter."""
     """
     root = tk.Tk()
@@ -87,33 +129,11 @@ def show_window(results: dict) -> None:
     root.mainloop()
     """
     
-def write_json(results: dict, out_path: str) -> None:
-    """
-    Zapisuje wyniki w formacie JSON.
-    • Jeśli plik nie istnieje → tworzy nowy plik z listą zawierającą jeden element.
-    • Jeśli plik istnieje → odczytuje istniejącą listę i dopisuje nowy słownik wyników.
-    """
+def write_json(results: dict | list[dict], out_path: str) -> None:
+    """Write analysis results as JSON."""
     path = Path(out_path)
-    write_list_json_bool = False
-    
-    if path.is_file():
-        try:
-            with path.open("r", encoding="utf-8") as f:
-                data = json.load(f)
-            if not isinstance(data, list):
-                data = [data]
-        except json.JSONDecodeError:
-            data = []
-    else:
-        data = []
-    
-    data.append(results)
-    
     with path.open("w", encoding="utf-8") as f:
-        if write_list_json_bool:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        else:
-            json.dump(results, f, ensure_ascii=False, indent=2)
+        json.dump(results, f, ensure_ascii=False, indent=2)
         
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -172,13 +192,16 @@ def main() -> None:
     results = analyze_audio(args.audio_file, spectrogram_path)
     
     if args.show_cli:
-        print(
-            f"Tempo: {results['tempo']} BPM\n"
-            f"Measure: {results['measure']}\n"
-            f"Tonality: {results['tonality']}\n"
-            f"Spectrogram: {results.get('spectrogram_png')}\n"
-            f"Bass estimate: {results.get('bass_estimate')}"
-        )
+        entries = results if isinstance(results, list) else [results]
+        for index, entry in enumerate(entries, start=1):
+            label = f"Segment {index}: " if len(entries) > 1 else ""
+            print(
+                f"{label}Tempo: {entry['tempo']} BPM\n"
+                f"Measure: {entry['measure']}\n"
+                f"Tonality: {entry['tonality']}\n"
+                f"Spectrogram: {entry.get('spectrogram_png')}\n"
+                f"Bass estimate: {entry.get('bass_estimate')}"
+            )
     
     if args.show_window:
         show_window(results)
