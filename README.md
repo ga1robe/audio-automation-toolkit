@@ -222,6 +222,15 @@ chunks to limit memory use. The toolkit applies the chunk start time when it
 merges the generated MIDI files, and removes temporary audio and MIDI chunks
 after processing. Smaller stems continue to use the normal single-process path.
 
+## Long-source audio analysis
+
+Before analyzing a source, the toolkit uses `src/modules/splitter.py` to cut at
+silence gaps of at least three seconds and further caps each analysis chunk at
+five minutes. A single-chunk analysis keeps the existing object format in
+`analysis.json`; multiple chunks are reported as a list, with each entry
+including its segment filename and analysis results. Temporary audio chunks
+are removed after analysis.
+
 ## Output
 
 For an input file such as:
@@ -322,7 +331,8 @@ For each audio file, the toolkit:
 1. Finds supported audio files.
 2. Splits the source into chunks of up to five minutes and separates each with Demucs.
 3. Joins the chunks for each stem into one WAV file without loading the entire result into memory.
-4. Analyzes tempo, key, and tonality.
+4. Splits each source into silence-separated chunks of up to five minutes and
+   analyzes tempo, key, and tonality for each chunk.
 5. Detects the vocal stem.
 6. Transcribes vocals with ASR.
 7. Converts the vocal stem to MIDI.
