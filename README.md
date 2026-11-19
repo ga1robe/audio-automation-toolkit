@@ -226,10 +226,14 @@ after processing. Smaller stems continue to use the normal single-process path.
 
 Before analyzing a source, the toolkit uses `src/modules/splitter.py` to cut at
 silence gaps of at least three seconds and further caps each analysis chunk at
-five minutes. A single-chunk analysis keeps the existing object format in
-`analysis.json`; multiple chunks are reported as a list, with each entry
-including its segment filename and analysis results. Temporary audio chunks
-are removed after analysis.
+five minutes. Each analysis entry includes a `segment` object with the source
+audio's `start_seconds` and `end_seconds`, rather than the temporary chunk
+filename. Adjacent chunks with matching tempo, key, measure, and tonality are
+merged into one entry and their segment range is extended. For a merged entry,
+`bass_estimate.median_hz` is recomputed from the voiced pitch frames of all
+merged chunks; segment medians are not averaged. A single chunk is returned as
+an object, while multiple resulting entries are returned as a list. Temporary
+audio chunks are removed after analysis.
 
 ## Output
 
