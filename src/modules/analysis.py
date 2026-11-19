@@ -11,7 +11,7 @@ from tempfile import TemporaryDirectory
 
 import matplotlib.pyplot as plt
 
-from splitter import split_dj_set_by_silence
+from splitter import split_dj_set_by_silence_with_timestamps
 
 
 def _analyze_audio_file(
@@ -49,6 +49,7 @@ def _analyze_audio_file(
         
     # BASS ESTIMATE: prosty oszacowanie linii basu przez librosa.pyin (fokus niskie freq)
     bass_estimate = None
+    voiced_pitches = np.array([], dtype=float)
     try:
         fmin = 40.0
         fmax = 400.0
@@ -73,7 +74,8 @@ def _analyze_audio_file(
         "tonality": tonality,
         "file": str(Path(file_path).name),
         #"spectrogram_png": spec_info,
-        "bass_estimate": bass_estimate
+        "bass_estimate": bass_estimate,
+        "_voiced_pitches": voiced_pitches,
     }
 
 
@@ -84,10 +86,12 @@ def analyze_audio(
     """Analyze silence-separated, duration-capped chunks of the source audio."""
     source_path = Path(file_path)
     with TemporaryDirectory(prefix="audio-analysis-") as temp_dir:
-        chunk_paths = split_dj_set_by_silence(source_path, Path(temp_dir))
+        chunks = split_dj_set_by_silence_with_timestamps(
+            source_path, Path(temp_dir)
+        )
         analyses: list[dict] = []
 
-        for index, chunk_path in enumerate(chunk_paths, start=1):
+        for index, chunk in enumerate(chunks, start=1):
             chunk_spectrogram_path = None
             if spectrogram_path:
                 output_path = Path(spectrogram_path)
@@ -95,20 +99,57 @@ def analyze_audio(
                     output_path.with_name(
                         f"{output_path.stem}.segment_{index:02d}{output_path.suffix}"
                     )
-                    if len(chunk_paths) > 1
+                    if len(chunks) > 1
                     else output_path
                 )
 
             result = _analyze_audio_file(
-                str(chunk_path),
+                str(chunk.path),
                 chunk_spectrogram_path,
             )
             result["file"] = source_path.name
-            if len(chunk_paths) > 1:
-                result["segment"] = chunk_path.name
+            result.setdefault("_voiced_pitches", np.array([], dtype=float))
+            result["segment"] = {
+                "start_seconds": chunk.start_ms / 1000,
+                "end_seconds": chunk.end_ms / 1000,
+            }
             analyses.append(result)
 
-    return analyses[0] if len(analyses) == 1 else analyses
+    merged_analyses: list[dict] = []
+    for result in analyses:
+        if merged_analyses and _same_analysis_metadata(
+            merged_analyses[-1], result
+        ):
+            previous = merged_analyses[-1]
+            previous["_voiced_pitches"] = np.concatenate(
+                (previous["_voiced_pitches"], result["_voiced_pitches"])
+            )
+            previous["segment"]["end_seconds"] = result["segment"]["end_seconds"]
+            _update_bass_estimate(previous)
+        else:
+            merged_analyses.append(result)
+
+    for result in merged_analyses:
+        result.pop("_voiced_pitches", None)
+    return merged_analyses[0] if len(merged_analyses) == 1 else merged_analyses
+
+
+def _same_analysis_metadata(first: dict, second: dict) -> bool:
+    """Compare fields that define analysis identity, excluding bass estimates."""
+    metadata_keys = ("tempo", "key_index", "measure", "tonality", "file")
+    return all(first.get(key) == second.get(key) for key in metadata_keys)
+
+
+def _update_bass_estimate(result: dict) -> None:
+    voiced_pitches = result["_voiced_pitches"]
+    if voiced_pitches.size:
+        median_hz = float(np.median(voiced_pitches))
+        result["bass_estimate"] = {
+            "median_hz": median_hz,
+            "median_midi": int(round(librosa.hz_to_midi(median_hz))),
+        }
+    else:
+        result["bass_estimate"] = None
     
 def show_window(results: dict | list[dict]) -> None:
     """Wyświetla wyniki w oknie Tkinter."""
