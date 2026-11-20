@@ -235,6 +235,12 @@ merged chunks; segment medians are not averaged. A single chunk is returned as
 an object, while multiple resulting entries are returned as a list. Temporary
 audio chunks are removed after analysis.
 
+The `full` stage also runs a librosa spectral-novelty pass over the complete
+source mix, including mixes without silence gaps. It records detected change
+timestamps and novelty scores in `<track>/structural_changes.json` and in the
+track's `structural_changes` manifest field. This reports candidate cut points;
+it does not modify or split the source audio.
+
 ## Output
 
 For an input file such as:
