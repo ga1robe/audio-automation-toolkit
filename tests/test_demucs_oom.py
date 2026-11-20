@@ -1,3 +1,4 @@
+import json
 import sys
 import wave
 from pathlib import Path
@@ -176,6 +177,10 @@ def test_pipeline_reuses_existing_stems_when_demucs_is_skipped(tmp_path):
 
     run_demucs.assert_not_called()
     assert run.call_count == 3
+    assert all(
+        "--novelty-output" not in call.args[0]
+        for call in run.call_args_list
+    )
     track_manifest = manifest["results"][0]
     assert set(track_manifest["stems"]) == {
         "vocals", "drums", "bass", "other", "guitar", "piano"
@@ -309,3 +314,65 @@ def test_normalize_asr_language_supports_us_alias():
 def test_normalize_asr_language_supports_automatic_detection():
     assert audio_toolkit.normalize_asr_language("None") is None
     assert audio_toolkit.normalize_asr_language("auto") is None
+
+
+def test_full_stage_records_structural_change_timestamps(tmp_path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    (input_dir / "mix.wav").touch()
+    stems_dir = output_dir / "mix" / "stems"
+    stems_dir.mkdir(parents=True)
+    (stems_dir / "other.wav").touch()
+    expected_changes = {
+        "method": "librosa.onset.onset_strength",
+        "sample_rate": 22050,
+        "hop_length": 512,
+        "changes": [{"timestamp_seconds": 18.75, "novelty_score": 0.42}],
+    }
+
+    def fake_run(cmd, check):
+        assert check is True
+        if Path(cmd[1]).name == "analysis.py":
+            analysis_path = Path(cmd[cmd.index("--output") + 1])
+            analysis_path.write_text('{"tempo": 120}', encoding="utf-8")
+            novelty_path = Path(cmd[cmd.index("--novelty-output") + 1])
+            novelty_path.write_text(
+                json.dumps(expected_changes),
+                encoding="utf-8",
+            )
+
+    with (
+        patch.object(
+            audio_toolkit,
+            "get_audio_metadata",
+            return_value={
+                "duration_seconds": 30.0,
+                "sample_rate": 44100,
+                "channels": 2,
+            },
+        ),
+        patch.object(
+            audio_toolkit,
+            "get_existing_demucs_stems",
+            return_value=stems_dir,
+        ),
+        patch.object(
+            audio_toolkit,
+            "run_basic_pitch_with_chunking",
+            return_value=tmp_path / "other.mid",
+        ),
+        patch.object(audio_toolkit.subprocess, "run", side_effect=fake_run),
+    ):
+        manifest = audio_toolkit.run_process_pipeline(
+            input_dir,
+            output_dir,
+            stage="full",
+            skip_asr=True,
+            skip_demucs=True,
+        )
+
+    track_manifest = manifest["results"][0]
+    assert track_manifest["structural_changes"] == expected_changes
+    assert track_manifest["structural_changes_file"] == "structural_changes.json"
+    assert track_manifest["status"] == "success"

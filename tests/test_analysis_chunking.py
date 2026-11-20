@@ -4,6 +4,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import numpy as np
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "modules"))
 
 import analysis
@@ -234,3 +236,56 @@ def test_audio_analysis_merges_adjacent_metadata_and_recomputes_bass_median(tmp_
         "end_seconds": 3.0,
     }
     assert all("_voiced_pitches" not in result for result in results)
+
+
+def test_structural_change_detection_uses_full_mix_spectral_novelty(tmp_path):
+    source_path = tmp_path / "continuous_mix.wav"
+    novelty = np.zeros(2000)
+    novelty[500] = 4.0
+    novelty[1500] = 8.0
+
+    with (
+        patch.object(
+            analysis.librosa,
+            "load",
+            return_value=(np.ones(22050), 22050),
+        ) as load_audio,
+        patch.object(
+            analysis.librosa.onset,
+            "onset_strength",
+            return_value=novelty,
+        ) as onset_strength,
+        patch.object(
+            analysis.librosa.util,
+            "peak_pick",
+            return_value=np.array([500, 1500]),
+        ),
+    ):
+        result = analysis.detect_structural_changes(str(source_path))
+
+    load_audio.assert_called_once_with(
+        str(source_path),
+        sr=analysis.STRUCTURAL_NOVELTY_SAMPLE_RATE,
+        mono=True,
+    )
+    onset_strength.assert_called_once()
+    assert result["method"] == "librosa.onset.onset_strength"
+    smoothing_frames = round(
+        analysis.STRUCTURAL_NOVELTY_SMOOTHING_SECONDS
+        * 22050
+        / analysis.STRUCTURAL_NOVELTY_HOP_LENGTH
+    )
+    assert result["changes"] == [
+        {
+            "timestamp_seconds": round(
+                500 * analysis.STRUCTURAL_NOVELTY_HOP_LENGTH / 22050, 3
+            ),
+            "novelty_score": round(4 / smoothing_frames, 6),
+        },
+        {
+            "timestamp_seconds": round(
+                1500 * analysis.STRUCTURAL_NOVELTY_HOP_LENGTH / 22050, 3
+            ),
+            "novelty_score": round(8 / smoothing_frames, 6),
+        },
+    ]
