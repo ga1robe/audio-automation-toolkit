@@ -630,6 +630,8 @@ def run_process_pipeline(
             "sample_rate": source_metadata["sample_rate"] if source_metadata else None,
             "channels": source_metadata["channels"] if source_metadata else None,
             "analysis": {},
+            "structural_changes": None,
+            "structural_changes_file": None,
             "stems": {},
             "midi": {},
             "transcription": None,
@@ -700,11 +702,17 @@ def run_process_pipeline(
                 flush=True,
             )
             analysis_json_path = track_out_dir / "analysis.json"
+            structural_changes_path = track_out_dir / "structural_changes.json"
             cmd_analysis = [
                 str(VENV_BASE), str(PROJECT_DIR / "src/modules/analysis.py"),
                 str(audio_path),
                 "--output", str(analysis_json_path)
             ]
+            if stage == "full":
+                structural_changes_path.unlink(missing_ok=True)
+                cmd_analysis.extend(
+                    ["--novelty-output", str(structural_changes_path)]
+                )
             try:
                 log_command("base", cmd_analysis, debug_steps)
                 subprocess.run(cmd_analysis, check=True)
@@ -722,6 +730,19 @@ def run_process_pipeline(
             if analysis_json_path.exists():
                 with open(analysis_json_path, "r", encoding="utf-8") as jf:
                     track_manifest["analysis"] = json.load(jf)
+            if stage == "full" and structural_changes_path.exists():
+                with structural_changes_path.open("r", encoding="utf-8") as jf:
+                    track_manifest["structural_changes"] = json.load(jf)
+                track_manifest["structural_changes_file"] = os.path.relpath(
+                    structural_changes_path, track_out_dir
+                )
+            elif stage == "full" and track_manifest["status"] != "failed":
+                message = "Structural novelty analysis did not produce an output file"
+                track_manifest["status"] = "failed"
+                track_manifest["warnings"].append(message)
+                track_manifest["logs"].append(
+                    {"level": "warning", "message": message}
+                )
 
             """
             determining whether 'track_manifest["analysis"]' is a list or a dictionary

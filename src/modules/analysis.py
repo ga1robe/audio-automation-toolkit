@@ -13,6 +13,11 @@ import matplotlib.pyplot as plt
 
 from splitter import split_dj_set_by_silence_with_timestamps
 
+STRUCTURAL_NOVELTY_SAMPLE_RATE = 22050
+STRUCTURAL_NOVELTY_HOP_LENGTH = 512
+STRUCTURAL_NOVELTY_SMOOTHING_SECONDS = 3.0
+STRUCTURAL_NOVELTY_MIN_GAP_SECONDS = 30.0
+
 
 def _analyze_audio_file(
     file_path: str,
@@ -134,6 +139,67 @@ def analyze_audio(
     return merged_analyses[0] if len(merged_analyses) == 1 else merged_analyses
 
 
+def detect_structural_changes(file_path: str) -> dict:
+    """Detect major spectral-flux changes across the complete source audio."""
+    y, sr = librosa.load(
+        file_path,
+        sr=STRUCTURAL_NOVELTY_SAMPLE_RATE,
+        mono=True,
+    )
+    if not y.size:
+        raise ValueError(f"Audio file is empty: {file_path}")
+
+    hop_length = STRUCTURAL_NOVELTY_HOP_LENGTH
+    novelty = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop_length)
+    if not novelty.size:
+        return {
+            "method": "librosa.onset.onset_strength",
+            "sample_rate": sr,
+            "hop_length": hop_length,
+            "changes": [],
+        }
+
+    smoothing_frames = max(
+        1,
+        min(
+            novelty.size,
+            int(round(STRUCTURAL_NOVELTY_SMOOTHING_SECONDS * sr / hop_length)),
+        ),
+    )
+    smoothed_novelty = np.convolve(
+        novelty,
+        np.ones(smoothing_frames, dtype=float) / smoothing_frames,
+        mode="same",
+    )
+    local_frames = max(1, int(round(2.0 * sr / hop_length)))
+    average_frames = max(1, int(round(10.0 * sr / hop_length)))
+    peak_frames = librosa.util.peak_pick(
+        smoothed_novelty,
+        pre_max=local_frames,
+        post_max=local_frames,
+        pre_avg=average_frames,
+        post_avg=average_frames,
+        delta=max(float(np.std(smoothed_novelty)) * 0.5, 1e-8),
+        wait=max(
+            1,
+            int(round(STRUCTURAL_NOVELTY_MIN_GAP_SECONDS * sr / hop_length)),
+        ),
+    )
+
+    return {
+        "method": "librosa.onset.onset_strength",
+        "sample_rate": sr,
+        "hop_length": hop_length,
+        "changes": [
+            {
+                "timestamp_seconds": round(float(frame * hop_length / sr), 3),
+                "novelty_score": round(float(smoothed_novelty[frame]), 6),
+            }
+            for frame in peak_frames
+        ],
+    }
+
+
 def _same_analysis_metadata(first: dict, second: dict) -> bool:
     """Compare fields that define analysis identity, excluding bass estimates."""
     metadata_keys = ("tempo", "key_index", "measure", "tonality", "file")
@@ -212,6 +278,11 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PNG",
         help="Ścieżka do pliku PNG, w którym zostanie zapisany spektrogram (Mel).",
     )
+    parser.add_argument(
+        "--novelty-output",
+        metavar="FILE",
+        help="Zapisuje wykryte zmiany strukturalne do pliku JSON.",
+    )
     return parser
     
 def main() -> None:
@@ -231,6 +302,11 @@ def main() -> None:
         spectrogram_path = str(outp.with_suffix(".spectrogram.png"))
     
     results = analyze_audio(args.audio_file, spectrogram_path)
+    if args.novelty_output:
+        write_json(
+            detect_structural_changes(args.audio_file),
+            args.novelty_output,
+        )
     
     if args.show_cli:
         entries = results if isinstance(results, list) else [results]
