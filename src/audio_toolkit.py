@@ -29,6 +29,8 @@ HEURISTICS_MAX_STEM_SIZE_BYTES = 200 * 1024 * 1024
 HEURISTICS_CHUNK_DURATION_MS = 5 * 60 * 1000
 BASIC_PITCH_MAX_STEM_SIZE_BYTES = 200 * 1024 * 1024
 BASIC_PITCH_CHUNK_DURATION_MS = 5 * 60 * 1000
+SPECTROGRAM_MAX_STEM_SIZE_BYTES = 200 * 1024 * 1024
+SPECTROGRAM_CHUNK_DURATION_MS = 5 * 60 * 1000
 DEMUCS_STEM_NAMES = {
     4: {"vocals.wav", "drums.wav", "bass.wav", "other.wav"},
     6: {"vocals.wav", "drums.wav", "bass.wav", "other.wav", "guitar.wav", "piano.wav"},
@@ -528,6 +530,143 @@ def run_demucs_with_fallback(audio_path: Path, stems_dir: Path, stems_count: int
 
     raise RuntimeError(f"Demucs failed for {audio_path}: {last_exc}")
 
+def run_spectrogram_with_chunking(
+    stem_file: Path,
+    output_spectro: Path,
+    stage: str = "full",
+    debug_steps: set[str] | None = None,
+) -> None:
+    """
+    Generuje spektrogram dla stemu. Dla dużych plików dzieli na okna 5-minutowe:
+    - dla stage == 'full' przelicza pełną oś czasu na wspólnym wykresie,
+    - dla pozostałych etapów skleja kafelki PNG oszczędnie pamięciowo.
+    """
+    spectrogram_script = PROJECT_DIR / "src/modules/spectrogram.py"
+    output_spectro.parent.mkdir(parents=True, exist_ok=True)
+
+    if stem_file.stat().st_size <= SPECTROGRAM_MAX_STEM_SIZE_BYTES:
+        cmd = [
+            str(VENV_BASE),
+            str(spectrogram_script),
+            "--input",
+            str(stem_file),
+            "--output",
+            str(output_spectro),
+        ]
+        log_command("base", cmd, debug_steps)
+        subprocess.run(cmd, check=True)
+        return
+
+    try:
+        metadata = get_audio_metadata(stem_file)
+        total_duration_s = float(metadata["duration_seconds"])
+    except Exception:
+        total_duration_s = None
+
+    chunk_duration_s = SPECTROGRAM_CHUNK_DURATION_MS / 1000.0
+    chunk_specs: list[dict[str, float]] = []
+
+    if total_duration_s is not None and total_duration_s > 0:
+        start_s = 0.0
+        while start_s < total_duration_s:
+            dur_s = min(chunk_duration_s, total_duration_s - start_s)
+            chunk_specs.append(
+                {
+                    "offset_seconds": round(start_s, 6),
+                    "duration_seconds": round(dur_s, 6),
+                }
+            )
+            start_s += chunk_duration_s
+    else:
+        # Fallback gdy metadata nie podaje czasu trwania: iterujemy po 300s aż do błędu pustego chunka
+        start_s = 0.0
+        while True:
+            chunk_specs.append(
+                {
+                    "offset_seconds": round(start_s, 6),
+                    "duration_seconds": round(chunk_duration_s, 6),
+                }
+            )
+            start_s += chunk_duration_s
+            if len(chunk_specs) > 200:
+                break
+
+    with tempfile.TemporaryDirectory(
+        prefix="spectrogram_chunks_",
+        dir=output_spectro.parent,
+    ) as temp_dir_name:
+        temp_dir = Path(temp_dir_name)
+        merged_tmp = temp_dir / "merged_spectrogram.png"
+
+        if stage == "full":
+            specs_file = temp_dir / "chunk_specs.json"
+            specs_file.write_text(
+                json.dumps(chunk_specs, ensure_ascii=False), encoding="utf-8"
+            )
+            cmd = [
+                str(VENV_BASE),
+                str(spectrogram_script),
+                "--input",
+                str(stem_file),
+                "--output",
+                str(merged_tmp),
+                "--combine-full-axis-from-chunks",
+                str(specs_file),
+            ]
+            print(
+                f"[audio-toolkit][base] Rendering combined full-axis spectrogram "
+                f"from {len(chunk_specs)} chunks for {stem_file.name}.",
+                flush=True,
+            )
+            log_command("base", cmd, debug_steps)
+            subprocess.run(cmd, check=True)
+            os.replace(merged_tmp, output_spectro)
+            return
+
+        tile_paths: list[Path] = []
+        for idx, spec in enumerate(chunk_specs, start=1):
+            tile_path = temp_dir / f"tile_{idx:06d}.png"
+            cmd = [
+                str(VENV_BASE),
+                str(spectrogram_script),
+                "--input",
+                str(stem_file),
+                "--output",
+                str(tile_path),
+                "--offset-seconds",
+                str(spec["offset_seconds"]),
+                "--duration-seconds",
+                str(spec["duration_seconds"]),
+                "--bare-panel",
+            ]
+            print(
+                f"[audio-toolkit][base] Rendering spectrogram tile "
+                f"{idx}/{len(chunk_specs)} for {stem_file.name}.",
+                flush=True,
+            )
+            log_command("base", cmd, debug_steps)
+            try:
+                subprocess.run(cmd, check=True)
+            except subprocess.CalledProcessError:
+                if total_duration_s is None and idx > 1:
+                    break
+                raise
+            tile_paths.append(tile_path)
+
+        stitch_cmd = [
+            str(VENV_BASE),
+            str(spectrogram_script),
+            "--input",
+            str(stem_file),
+            "--output",
+            str(merged_tmp),
+            "--stitch-tiles",
+            *(str(p) for p in tile_paths),
+        ]
+        log_command("base", stitch_cmd, debug_steps)
+        subprocess.run(stitch_cmd, check=True)
+        os.replace(merged_tmp, output_spectro)
+
 def run_process_pipeline(
     input_dir: Path,
     output_dir: Path,
@@ -829,18 +968,13 @@ def run_process_pipeline(
                 track_manifest["logs"].append(
                     {"level": "info", "message": message}
                 )
-
             if spectro_bool and stage in {"full", "base"}:
                 spectro_dir.mkdir(parents=True, exist_ok=True)
                 out_spectro = spectro_dir.joinpath(f"spectrogram.{stem_type}.png")
-                cmd_spectro = [
-                    str(VENV_BASE), str(PROJECT_DIR / "src/modules/spectrogram.py"),
-                    "--input", stem_file,
-                    "--output", out_spectro,
-                ]
-                log_command("base", cmd_spectro, debug_steps)
                 try:
-                    subprocess.run(cmd_spectro, check=True)
+                    run_spectrogram_with_chunking(
+                        stem_file, out_spectro, stage=stage, debug_steps=debug_steps
+                    )
                 except subprocess.CalledProcessError as exc:
                     out_spectro.unlink(missing_ok=True)
                     print(
