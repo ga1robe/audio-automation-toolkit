@@ -678,8 +678,12 @@ def run_process_pipeline(
     stage: str = "full",
     skip_asr: bool = False,
     skip_demucs: bool = False,
+    only_demucs: bool = False,
 ) -> dict:
     """Uruchamia potok przetwarzania audio dla wybranego etapu lub pełnej konfiguracji."""
+    if skip_demucs and only_demucs:
+        raise ValueError("skip_demucs and only_demucs cannot both be enabled.")
+
     pipeline_started_at = time.perf_counter()
     input_dir = input_dir.resolve()
     output_dir = output_dir.resolve()
@@ -732,7 +736,7 @@ def run_process_pipeline(
         "toolkit_version": "1.0.0",
         "input_dir": str(input_dir),
         "output_dir": str(output_dir),
-        "pipeline_stage": stage,
+        "pipeline_stage": "demucs" if only_demucs else stage,
         "input_files": [p.name for p in audio_files],
         "processed_files_count": len(audio_files),
         "results": [],
@@ -782,13 +786,19 @@ def run_process_pipeline(
                 },
                 "basic_pitch": {
                     "package_version": model_versions["basic_pitch"],
-                    "model": "ICASSP_2022" if stage in {"full", "tf"} else None,
+                    "model": (
+                        "ICASSP_2022"
+                        if not only_demucs and stage in {"full", "tf"}
+                        else None
+                    ),
                 },
                 "whisper": {
                     "package_version": model_versions["whisper"],
                     "model": (
                         asr_model
-                        if stage in {"full", "asr"} and not skip_asr
+                        if not only_demucs
+                        and stage in {"full", "asr"}
+                        and not skip_asr
                         else None
                     ),
                 },
@@ -798,7 +808,7 @@ def run_process_pipeline(
             "status": "processing",
         }
 
-        if stage in {"full", "base"}:
+        if only_demucs or stage in {"full", "base"}:
             if skip_demucs:
                 actual_stems_path = get_existing_demucs_stems(stems_dir)
                 print(
@@ -831,6 +841,31 @@ def run_process_pipeline(
                 )
         else:
             actual_stems_path = input_dir
+
+        if only_demucs:
+            track_out_dir.mkdir(parents=True, exist_ok=True)
+            for stem_file in actual_stems_path.glob("*.wav"):
+                stem_type = stem_file.stem.lower()
+                track_manifest["stems"][stem_type] = os.path.relpath(
+                    stem_file, track_out_dir
+                )
+            track_manifest["outputs"] = {
+                "stems": list(track_manifest["stems"].values()),
+                "midi": [],
+                "lyrics": [],
+            }
+            track_manifest["processing_time_seconds"] = round(
+                time.perf_counter() - track_started_at, 3
+            )
+            track_manifest["status"] = "success"
+            track_manifest["logs"].append(
+                {
+                    "level": "info",
+                    "message": "Demucs stem generation finished; later processing was skipped.",
+                }
+            )
+            execution_manifest["results"].append(track_manifest)
+            continue
 
         track_out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1053,10 +1088,18 @@ def main():
         dest="skip_asr",
         help="Pomija transkrypcję ASR/Whisper.",
     )
-    parser.add_argument(
+    demucs_options = parser.add_mutually_exclusive_group()
+    demucs_options.add_argument(
         "--skip-demucs",
         action="store_true",
         help="Reuses existing complete stems from the output directory instead of running Demucs.",
+    )
+    demucs_options.add_argument(
+        "--only-demucs",
+        "--only-generate-stems",
+        action="store_true",
+        dest="only_demucs",
+        help="Runs Demucs only and skips analysis and all subsequent processing.",
     )
     parser.add_argument("--model", type=str, default="small", help="Model Whisper (domyślnie: small)")
     parser.add_argument("--json-out", type=Path, help="Ścieżka zapisu zbiorczego raportu JSON")
@@ -1080,7 +1123,10 @@ def main():
     if debug_steps is not None and not debug_steps:
         debug_steps = {"base", "tf", "asr"}
 
-    ensure_venv_interpreters(stage=args.stage, skip_asr=args.skip_asr)
+    ensure_venv_interpreters(
+        stage="base" if args.only_demucs else args.stage,
+        skip_asr=args.skip_asr,
+    )
 
     manifest = run_process_pipeline(
         input_dir=args.input,
@@ -1093,6 +1139,7 @@ def main():
         stage=args.stage,
         skip_asr=args.skip_asr,
         skip_demucs=args.skip_demucs,
+        only_demucs=args.only_demucs,
     )
     
     json_output = json.dumps(manifest, ensure_ascii=False, indent=2)
