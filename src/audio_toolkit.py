@@ -25,6 +25,12 @@ DEMUCS_CHUNK_DURATION_MS = 5 * 60 * 1000
 DEMUCS_CHUNK_TIMEOUT_SECONDS = int(
     os.environ.get("DEMUCS_CHUNK_TIMEOUT_SECONDS", "900")
 )
+HEURISTICS_MAX_STEM_SIZE_BYTES = 200 * 1024 * 1024
+HEURISTICS_CHUNK_DURATION_MS = 5 * 60 * 1000
+BASIC_PITCH_MAX_STEM_SIZE_BYTES = 200 * 1024 * 1024
+BASIC_PITCH_CHUNK_DURATION_MS = 5 * 60 * 1000
+SPECTROGRAM_MAX_STEM_SIZE_BYTES = 200 * 1024 * 1024
+SPECTROGRAM_CHUNK_DURATION_MS = 5 * 60 * 1000
 DEMUCS_STEM_NAMES = {
     4: {"vocals.wav", "drums.wav", "bass.wav", "other.wav"},
     6: {"vocals.wav", "drums.wav", "bass.wav", "other.wav", "guitar.wav", "piano.wav"},
@@ -135,8 +141,17 @@ def is_kernel_kill_exit(returncode: int) -> bool:
     return returncode in (-signal.SIGKILL, signal.SIGKILL, 137, -137) or abs(returncode) == signal.SIGKILL
 
 
-def split_audio_into_chunks(audio_path: Path, chunks_dir: Path) -> list[Path]:
+def split_audio_into_chunks(
+    audio_path: Path,
+    chunks_dir: Path,
+    chunk_duration_ms: int | None = None,
+) -> list[Path]:
     from pydub import AudioSegment
+
+    if chunk_duration_ms is None:
+        chunk_duration_ms = DEMUCS_CHUNK_DURATION_MS
+    if chunk_duration_ms <= 0:
+        raise ValueError("Audio chunk duration must be greater than zero.")
 
     chunks_dir.mkdir(parents=True, exist_ok=True)
     chunks = []
@@ -146,7 +161,7 @@ def split_audio_into_chunks(audio_path: Path, chunks_dir: Path) -> list[Path]:
         segment = AudioSegment.from_file(
             str(audio_path),
             start_second=start_ms / 1000,
-            duration=DEMUCS_CHUNK_DURATION_MS / 1000,
+            duration=chunk_duration_ms / 1000,
         )
         segment_duration_ms = len(segment)
         if segment_duration_ms == 0:
@@ -157,14 +172,196 @@ def split_audio_into_chunks(audio_path: Path, chunks_dir: Path) -> list[Path]:
         del segment
         chunks.append(chunk_path)
 
-        if segment_duration_ms < DEMUCS_CHUNK_DURATION_MS:
+        if segment_duration_ms < chunk_duration_ms:
             break
-        start_ms += DEMUCS_CHUNK_DURATION_MS
+        start_ms += chunk_duration_ms
 
     if not chunks:
         raise RuntimeError(f"Nie udało się odczytać audio z pliku: {audio_path}")
 
     return chunks
+
+
+def merge_midi_chunks(
+    midi_paths: list[Path],
+    output_path: Path,
+    chunk_duration_ms: int,
+    tempo_bpm: float,
+) -> None:
+    import mido
+
+    if not midi_paths:
+        raise ValueError("At least one MIDI chunk is required.")
+    if chunk_duration_ms <= 0 or tempo_bpm <= 0:
+        raise ValueError("Chunk duration and tempo must be greater than zero.")
+
+    source_midis = [mido.MidiFile(path) for path in midi_paths]
+    ticks_per_beat = source_midis[0].ticks_per_beat
+    track_count = len(source_midis[0].tracks)
+    if track_count == 0:
+        raise RuntimeError("Heuristics produced MIDI chunks with no tracks.")
+    if any(
+        midi.ticks_per_beat != ticks_per_beat
+        or len(midi.tracks) != track_count
+        for midi in source_midis
+    ):
+        raise RuntimeError("Heuristics produced incompatible MIDI chunks.")
+
+    merged = mido.MidiFile(type=1, ticks_per_beat=ticks_per_beat)
+    tempo_microseconds = int(round(60_000_000 / tempo_bpm))
+
+    for track_index in range(track_count):
+        events: list[tuple[int, int, int, object]] = []
+        for chunk_index, midi in enumerate(source_midis):
+            offset_ticks = round(
+                mido.second2tick(
+                    chunk_index * chunk_duration_ms / 1000,
+                    ticks_per_beat,
+                    tempo_microseconds,
+                )
+            )
+            absolute_tick = 0
+            for event_index, message in enumerate(midi.tracks[track_index]):
+                absolute_tick += message.time
+                if message.type != "end_of_track":
+                    events.append(
+                        (
+                            absolute_tick + offset_ticks,
+                            chunk_index,
+                            event_index,
+                            message,
+                        )
+                    )
+
+        track = mido.MidiTrack()
+        previous_tick = 0
+        for absolute_tick, _, _, message in sorted(
+            events, key=lambda event: event[:3]
+        ):
+            track.append(message.copy(time=absolute_tick - previous_tick))
+            previous_tick = absolute_tick
+        track.append(mido.MetaMessage("end_of_track", time=0))
+        merged.tracks.append(track)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    merged.save(str(output_path))
+
+
+def run_heuristics_with_chunking(
+    heuristic_type: str,
+    stem_file: Path,
+    output_midi: Path,
+    tempo_bpm: float,
+    debug_steps: set[str] | None = None,
+) -> None:
+    if heuristic_type not in {"drums", "bass"}:
+        raise ValueError(f"Unsupported heuristic type: {heuristic_type}")
+
+    heuristic_script = PROJECT_DIR / "src/modules/heuristics.py"
+    output_midi.parent.mkdir(parents=True, exist_ok=True)
+    if stem_file.stat().st_size <= HEURISTICS_MAX_STEM_SIZE_BYTES:
+        cmd = [
+            str(VENV_BASE), str(heuristic_script),
+            "--type", heuristic_type,
+            "--input", str(stem_file),
+            "--output", str(output_midi),
+            "--tempo", str(tempo_bpm),
+        ]
+        log_command("base", cmd, debug_steps)
+        subprocess.run(cmd, check=True)
+        return
+
+    with tempfile.TemporaryDirectory(
+        prefix="heuristics_chunks_",
+        dir=output_midi.parent,
+    ) as temp_dir_name:
+        temp_dir = Path(temp_dir_name)
+        chunk_paths = split_audio_into_chunks(
+            stem_file,
+            temp_dir / "audio_chunks",
+            chunk_duration_ms=HEURISTICS_CHUNK_DURATION_MS,
+        )
+        midi_chunk_paths = []
+        for chunk_index, chunk_path in enumerate(chunk_paths):
+            chunk_midi_path = temp_dir / "midi_chunks" / f"chunk_{chunk_index:06d}.mid"
+            cmd = [
+                str(VENV_BASE), str(heuristic_script),
+                "--type", heuristic_type,
+                "--input", str(chunk_path),
+                "--output", str(chunk_midi_path),
+                "--tempo", str(tempo_bpm),
+            ]
+            print(
+                f"[audio-toolkit][base] Processing {heuristic_type} stem chunk "
+                f"{chunk_index + 1}/{len(chunk_paths)}.",
+                flush=True,
+            )
+            log_command("base", cmd, debug_steps)
+            subprocess.run(cmd, check=True)
+            midi_chunk_paths.append(chunk_midi_path)
+
+        merged_midi_path = temp_dir / "merged.mid"
+        merge_midi_chunks(
+            midi_chunk_paths,
+            merged_midi_path,
+            chunk_duration_ms=HEURISTICS_CHUNK_DURATION_MS,
+            tempo_bpm=tempo_bpm,
+        )
+        os.replace(merged_midi_path, output_midi)
+
+
+def run_basic_pitch_with_chunking(
+    stem_file: Path,
+    output_midi: Path,
+    debug_steps: set[str] | None = None,
+) -> None:
+    basic_pitch_script = PROJECT_DIR / "src/modules/conversion_basicpitch.py"
+    output_midi.parent.mkdir(parents=True, exist_ok=True)
+    if stem_file.stat().st_size <= BASIC_PITCH_MAX_STEM_SIZE_BYTES:
+        cmd = [
+            str(VENV_TF), str(basic_pitch_script),
+            str(stem_file), str(output_midi),
+        ]
+        log_command("tf", cmd, debug_steps)
+        subprocess.run(cmd, check=True)
+        return
+
+    with tempfile.TemporaryDirectory(
+        prefix="basic_pitch_chunks_",
+        dir=output_midi.parent,
+    ) as temp_dir_name:
+        temp_dir = Path(temp_dir_name)
+        chunk_paths = split_audio_into_chunks(
+            stem_file,
+            temp_dir / "audio_chunks",
+            chunk_duration_ms=BASIC_PITCH_CHUNK_DURATION_MS,
+        )
+        midi_chunk_paths = []
+        for chunk_index, chunk_path in enumerate(chunk_paths):
+            chunk_midi_path = (
+                temp_dir / "midi_chunks" / f"chunk_{chunk_index:06d}.mid"
+            )
+            cmd = [
+                str(VENV_TF), str(basic_pitch_script),
+                str(chunk_path), str(chunk_midi_path),
+            ]
+            print(
+                f"[audio-toolkit][tf] Processing Basic Pitch stem chunk "
+                f"{chunk_index + 1}/{len(chunk_paths)}.",
+                flush=True,
+            )
+            log_command("tf", cmd, debug_steps)
+            subprocess.run(cmd, check=True)
+            midi_chunk_paths.append(chunk_midi_path)
+
+        merged_midi_path = temp_dir / "merged.mid"
+        merge_midi_chunks(
+            midi_chunk_paths,
+            merged_midi_path,
+            chunk_duration_ms=BASIC_PITCH_CHUNK_DURATION_MS,
+            tempo_bpm=120.0,
+        )
+        os.replace(merged_midi_path, output_midi)
 
 
 def combine_demucs_stems(
@@ -193,6 +390,32 @@ def combine_demucs_stems(
 
                     while frames := chunk.readframes(65536):
                         combined.writeframesraw(frames)
+
+
+def get_existing_demucs_stems(stems_dir: Path) -> Path:
+    stem_files = {
+        path.name: path
+        for path in stems_dir.glob("*.wav")
+        if path.is_file()
+    }
+    stem_names = set(stem_files)
+
+    for stems_count in (6, 4):
+        if stem_names == DEMUCS_STEM_NAMES[stems_count]:
+            empty_stems = [
+                path.name for path in stem_files.values() if path.stat().st_size == 0
+            ]
+            if empty_stems:
+                raise RuntimeError(
+                    f"Cannot reuse empty stem files in {stems_dir}: "
+                    f"{sorted(empty_stems)}"
+                )
+            return stems_dir
+
+    raise RuntimeError(
+        f"Cannot reuse stems in {stems_dir}: found {sorted(stem_names)}; "
+        "expected the complete 4-stem or 6-stem Demucs set."
+    )
 
 
 def run_demucs_with_fallback(audio_path: Path, stems_dir: Path, stems_count: int, debug_steps: set[str] | None = None) -> int:
@@ -307,6 +530,143 @@ def run_demucs_with_fallback(audio_path: Path, stems_dir: Path, stems_count: int
 
     raise RuntimeError(f"Demucs failed for {audio_path}: {last_exc}")
 
+def run_spectrogram_with_chunking(
+    stem_file: Path,
+    output_spectro: Path,
+    stage: str = "full",
+    debug_steps: set[str] | None = None,
+) -> None:
+    """
+    Generuje spektrogram dla stemu. Dla dużych plików dzieli na okna 5-minutowe:
+    - dla stage == 'full' przelicza pełną oś czasu na wspólnym wykresie,
+    - dla pozostałych etapów skleja kafelki PNG oszczędnie pamięciowo.
+    """
+    spectrogram_script = PROJECT_DIR / "src/modules/spectrogram.py"
+    output_spectro.parent.mkdir(parents=True, exist_ok=True)
+
+    if stem_file.stat().st_size <= SPECTROGRAM_MAX_STEM_SIZE_BYTES:
+        cmd = [
+            str(VENV_BASE),
+            str(spectrogram_script),
+            "--input",
+            str(stem_file),
+            "--output",
+            str(output_spectro),
+        ]
+        log_command("base", cmd, debug_steps)
+        subprocess.run(cmd, check=True)
+        return
+
+    try:
+        metadata = get_audio_metadata(stem_file)
+        total_duration_s = float(metadata["duration_seconds"])
+    except Exception:
+        total_duration_s = None
+
+    chunk_duration_s = SPECTROGRAM_CHUNK_DURATION_MS / 1000.0
+    chunk_specs: list[dict[str, float]] = []
+
+    if total_duration_s is not None and total_duration_s > 0:
+        start_s = 0.0
+        while start_s < total_duration_s:
+            dur_s = min(chunk_duration_s, total_duration_s - start_s)
+            chunk_specs.append(
+                {
+                    "offset_seconds": round(start_s, 6),
+                    "duration_seconds": round(dur_s, 6),
+                }
+            )
+            start_s += chunk_duration_s
+    else:
+        # Fallback gdy metadata nie podaje czasu trwania: iterujemy po 300s aż do błędu pustego chunka
+        start_s = 0.0
+        while True:
+            chunk_specs.append(
+                {
+                    "offset_seconds": round(start_s, 6),
+                    "duration_seconds": round(chunk_duration_s, 6),
+                }
+            )
+            start_s += chunk_duration_s
+            if len(chunk_specs) > 200:
+                break
+
+    with tempfile.TemporaryDirectory(
+        prefix="spectrogram_chunks_",
+        dir=output_spectro.parent,
+    ) as temp_dir_name:
+        temp_dir = Path(temp_dir_name)
+        merged_tmp = temp_dir / "merged_spectrogram.png"
+
+        if stage == "full":
+            specs_file = temp_dir / "chunk_specs.json"
+            specs_file.write_text(
+                json.dumps(chunk_specs, ensure_ascii=False), encoding="utf-8"
+            )
+            cmd = [
+                str(VENV_BASE),
+                str(spectrogram_script),
+                "--input",
+                str(stem_file),
+                "--output",
+                str(merged_tmp),
+                "--combine-full-axis-from-chunks",
+                str(specs_file),
+            ]
+            print(
+                f"[audio-toolkit][base] Rendering combined full-axis spectrogram "
+                f"from {len(chunk_specs)} chunks for {stem_file.name}.",
+                flush=True,
+            )
+            log_command("base", cmd, debug_steps)
+            subprocess.run(cmd, check=True)
+            os.replace(merged_tmp, output_spectro)
+            return
+
+        tile_paths: list[Path] = []
+        for idx, spec in enumerate(chunk_specs, start=1):
+            tile_path = temp_dir / f"tile_{idx:06d}.png"
+            cmd = [
+                str(VENV_BASE),
+                str(spectrogram_script),
+                "--input",
+                str(stem_file),
+                "--output",
+                str(tile_path),
+                "--offset-seconds",
+                str(spec["offset_seconds"]),
+                "--duration-seconds",
+                str(spec["duration_seconds"]),
+                "--bare-panel",
+            ]
+            print(
+                f"[audio-toolkit][base] Rendering spectrogram tile "
+                f"{idx}/{len(chunk_specs)} for {stem_file.name}.",
+                flush=True,
+            )
+            log_command("base", cmd, debug_steps)
+            try:
+                subprocess.run(cmd, check=True)
+            except subprocess.CalledProcessError:
+                if total_duration_s is None and idx > 1:
+                    break
+                raise
+            tile_paths.append(tile_path)
+
+        stitch_cmd = [
+            str(VENV_BASE),
+            str(spectrogram_script),
+            "--input",
+            str(stem_file),
+            "--output",
+            str(merged_tmp),
+            "--stitch-tiles",
+            *(str(p) for p in tile_paths),
+        ]
+        log_command("base", stitch_cmd, debug_steps)
+        subprocess.run(stitch_cmd, check=True)
+        os.replace(merged_tmp, output_spectro)
+
 def run_process_pipeline(
     input_dir: Path,
     output_dir: Path,
@@ -317,8 +677,13 @@ def run_process_pipeline(
     debug_steps: set[str] | None = None,
     stage: str = "full",
     skip_asr: bool = False,
+    skip_demucs: bool = False,
+    only_demucs: bool = False,
 ) -> dict:
     """Uruchamia potok przetwarzania audio dla wybranego etapu lub pełnej konfiguracji."""
+    if skip_demucs and only_demucs:
+        raise ValueError("skip_demucs and only_demucs cannot both be enabled.")
+
     pipeline_started_at = time.perf_counter()
     input_dir = input_dir.resolve()
     output_dir = output_dir.resolve()
@@ -371,7 +736,7 @@ def run_process_pipeline(
         "toolkit_version": "1.0.0",
         "input_dir": str(input_dir),
         "output_dir": str(output_dir),
-        "pipeline_stage": stage,
+        "pipeline_stage": "demucs" if only_demucs else stage,
         "input_files": [p.name for p in audio_files],
         "processed_files_count": len(audio_files),
         "results": [],
@@ -408,6 +773,8 @@ def run_process_pipeline(
             "sample_rate": source_metadata["sample_rate"] if source_metadata else None,
             "channels": source_metadata["channels"] if source_metadata else None,
             "analysis": {},
+            "structural_changes": None,
+            "structural_changes_file": None,
             "stems": {},
             "midi": {},
             "transcription": None,
@@ -419,13 +786,19 @@ def run_process_pipeline(
                 },
                 "basic_pitch": {
                     "package_version": model_versions["basic_pitch"],
-                    "model": "ICASSP_2022" if stage in {"full", "tf"} else None,
+                    "model": (
+                        "ICASSP_2022"
+                        if not only_demucs and stage in {"full", "tf"}
+                        else None
+                    ),
                 },
                 "whisper": {
                     "package_version": model_versions["whisper"],
                     "model": (
                         asr_model
-                        if stage in {"full", "asr"} and not skip_asr
+                        if not only_demucs
+                        and stage in {"full", "asr"}
+                        and not skip_asr
                         else None
                     ),
                 },
@@ -435,23 +808,31 @@ def run_process_pipeline(
             "status": "processing",
         }
 
-        if stage in {"full", "base"}:
-            # 1. Separate audio with Demucs.
-            actual_stems_count = run_demucs_with_fallback(
-                audio_path, stems_dir, stems_count, debug_steps
-            )
-            track_manifest["models"]["demucs"]["model"] = (
-                "htdemucs_6s" if actual_stems_count == 6 else "htdemucs"
-            )
+        if only_demucs or stage in {"full", "base"}:
+            if skip_demucs:
+                actual_stems_path = get_existing_demucs_stems(stems_dir)
+                print(
+                    f"[audio-toolkit][base] Reusing existing stems from "
+                    f"{actual_stems_path}; skipping Demucs.",
+                    flush=True,
+                )
+            else:
+                # 1. Separate audio with Demucs.
+                actual_stems_count = run_demucs_with_fallback(
+                    audio_path, stems_dir, stems_count, debug_steps
+                )
+                track_manifest["models"]["demucs"]["model"] = (
+                    "htdemucs_6s" if actual_stems_count == 6 else "htdemucs"
+                )
 
-            short_actual_stems_path_bool = True
-            actual_stems_path = stems_dir / track_name
-            if short_actual_stems_path_bool:
-                shutil.copytree(str(stems_dir / track_name),str(stems_dir), dirs_exist_ok=True)
-                shutil.rmtree(str(stems_dir / track_name), ignore_errors=False)
+                short_actual_stems_path_bool = True
                 actual_stems_path = stems_dir / track_name
-                if not actual_stems_path.exists():
-                    actual_stems_path = stems_dir
+                if short_actual_stems_path_bool:
+                    shutil.copytree(str(stems_dir / track_name),str(stems_dir), dirs_exist_ok=True)
+                    shutil.rmtree(str(stems_dir / track_name), ignore_errors=False)
+                    actual_stems_path = stems_dir / track_name
+                    if not actual_stems_path.exists():
+                        actual_stems_path = stems_dir
 
             if not actual_stems_path.is_dir():
                 raise RuntimeError(
@@ -460,6 +841,31 @@ def run_process_pipeline(
                 )
         else:
             actual_stems_path = input_dir
+
+        if only_demucs:
+            track_out_dir.mkdir(parents=True, exist_ok=True)
+            for stem_file in actual_stems_path.glob("*.wav"):
+                stem_type = stem_file.stem.lower()
+                track_manifest["stems"][stem_type] = os.path.relpath(
+                    stem_file, track_out_dir
+                )
+            track_manifest["outputs"] = {
+                "stems": list(track_manifest["stems"].values()),
+                "midi": [],
+                "lyrics": [],
+            }
+            track_manifest["processing_time_seconds"] = round(
+                time.perf_counter() - track_started_at, 3
+            )
+            track_manifest["status"] = "success"
+            track_manifest["logs"].append(
+                {
+                    "level": "info",
+                    "message": "Demucs stem generation finished; later processing was skipped.",
+                }
+            )
+            execution_manifest["results"].append(track_manifest)
+            continue
 
         track_out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -470,11 +876,17 @@ def run_process_pipeline(
                 flush=True,
             )
             analysis_json_path = track_out_dir / "analysis.json"
+            structural_changes_path = track_out_dir / "structural_changes.json"
             cmd_analysis = [
                 str(VENV_BASE), str(PROJECT_DIR / "src/modules/analysis.py"),
                 str(audio_path),
                 "--output", str(analysis_json_path)
             ]
+            if stage == "full":
+                structural_changes_path.unlink(missing_ok=True)
+                cmd_analysis.extend(
+                    ["--novelty-output", str(structural_changes_path)]
+                )
             try:
                 log_command("base", cmd_analysis, debug_steps)
                 subprocess.run(cmd_analysis, check=True)
@@ -492,6 +904,19 @@ def run_process_pipeline(
             if analysis_json_path.exists():
                 with open(analysis_json_path, "r", encoding="utf-8") as jf:
                     track_manifest["analysis"] = json.load(jf)
+            if stage == "full" and structural_changes_path.exists():
+                with structural_changes_path.open("r", encoding="utf-8") as jf:
+                    track_manifest["structural_changes"] = json.load(jf)
+                track_manifest["structural_changes_file"] = os.path.relpath(
+                    structural_changes_path, track_out_dir
+                )
+            elif stage == "full" and track_manifest["status"] != "failed":
+                message = "Structural novelty analysis did not produce an output file"
+                track_manifest["status"] = "failed"
+                track_manifest["warnings"].append(message)
+                track_manifest["logs"].append(
+                    {"level": "warning", "message": message}
+                )
 
             """
             determining whether 'track_manifest["analysis"]' is a list or a dictionary
@@ -535,60 +960,56 @@ def run_process_pipeline(
                     "srt": str(asr_dir / f"{stem_file.stem}.srt") if write_absolute_paths_bool else os.path.relpath(str(asr_dir / f"{stem_file.stem}.srt"), track_out_dir)
                 }
 
-            if stem_type in ["vocals", "vocal"] and stage in {"full", "tf"}:
-                # Basic Pitch (Melodia / Inne)
-                out_midi = midi_dir / f"{stem_type}.mid"
-                cmd_bp = [
-                    str(VENV_TF), str(PROJECT_DIR / "src/modules/conversion_basicpitch.py"),
-                    str(stem_file), str(out_midi)
-                ]
-                log_command("tf", cmd_bp, debug_steps)
-                subprocess.run(cmd_bp, check=True)
-                track_manifest["midi"][stem_type] = str(out_midi) if write_absolute_paths_bool else os.path.relpath(out_midi, track_out_dir)
-            elif "drum" in stem_type and stage in {"full", "base"}:
+            if "drum" in stem_type and stage in {"full", "base"}:
                 # Heurystyka perkusyjna
                 out_midi = midi_dir / f"drums.mid"
-                cmd_drums = [
-                    str(VENV_BASE), str(PROJECT_DIR / "src/modules/heuristics.py"),
-                    "--type", "drums", "--input", str(stem_file), "--output", str(out_midi),
-                    "--tempo", str(detected_tempo)
-                ]
-                log_command("base", cmd_drums, debug_steps)
-                subprocess.run(cmd_drums, check=True)
+                run_heuristics_with_chunking(
+                    "drums", stem_file, out_midi, detected_tempo, debug_steps
+                )
                 track_manifest["midi"]["drums"] = str(out_midi) if write_absolute_paths_bool else os.path.relpath(out_midi, track_out_dir)
             elif "bass" in stem_type and stage in {"full", "base"}:
                 # Heurystyka basowa
                 out_midi = midi_dir / f"bass.mid"
-                cmd_bass = [
-                    str(VENV_BASE), str(PROJECT_DIR / "src/modules/heuristics.py"),
-                    "--type", "bass", "--input", str(stem_file), "--output", str(out_midi),
-                    "--tempo", str(detected_tempo)
-                ]
-                log_command("base", cmd_bass, debug_steps)
-                subprocess.run(cmd_bass, check=True)
+                run_heuristics_with_chunking(
+                    "bass", stem_file, out_midi, detected_tempo, debug_steps
+                )
                 track_manifest["midi"]["bass"] = str(out_midi) if write_absolute_paths_bool else os.path.relpath(out_midi, track_out_dir)
             elif stage in {"full", "tf"}:
-                # Basic Pitch (Melodia / Inne)
                 out_midi = midi_dir / f"{stem_type}.mid"
-                cmd_bp = [
-                    str(VENV_TF), str(PROJECT_DIR / "src/modules/conversion_basicpitch.py"),
-                    str(stem_file), str(out_midi)
-                ]
-                log_command("tf", cmd_bp, debug_steps)
-                subprocess.run(cmd_bp, check=True)
-                track_manifest["midi"][stem_type] = str(out_midi) if write_absolute_paths_bool else os.path.relpath(out_midi, track_out_dir)
-
+                out_midi.unlink(missing_ok=True)
+                try:
+                    run_basic_pitch_with_chunking(
+                        stem_file, out_midi, debug_steps
+                    )
+                except subprocess.CalledProcessError as exc:
+                    out_midi.unlink(missing_ok=True)
+                    message = (
+                        f"Basic Pitch MIDI generation failed for {stem_file.name} "
+                        f"(exit code {exc.returncode})"
+                    )
+                    print(f"[audio-toolkit][tf] {message}.", file=sys.stderr, flush=True)
+                    track_manifest["status"] = "failed"
+                    track_manifest["warnings"].append(message)
+                    track_manifest["logs"].append(
+                        {"level": "warning", "message": message}
+                    )
+                else:
+                    track_manifest["midi"][stem_type] = str(out_midi) if write_absolute_paths_bool else os.path.relpath(out_midi, track_out_dir)
+            else:
+                message = (
+                    f"Basic Pitch MIDI skipped for {stem_file.name}: "
+                    f"pipeline stage '{stage}' does not include Basic Pitch."
+                )
+                track_manifest["logs"].append(
+                    {"level": "info", "message": message}
+                )
             if spectro_bool and stage in {"full", "base"}:
                 spectro_dir.mkdir(parents=True, exist_ok=True)
                 out_spectro = spectro_dir.joinpath(f"spectrogram.{stem_type}.png")
-                cmd_spectro = [
-                    str(VENV_BASE), str(PROJECT_DIR / "src/modules/spectrogram.py"),
-                    "--input", stem_file,
-                    "--output", out_spectro,
-                ]
-                log_command("base", cmd_spectro, debug_steps)
                 try:
-                    subprocess.run(cmd_spectro, check=True)
+                    run_spectrogram_with_chunking(
+                        stem_file, out_spectro, stage=stage, debug_steps=debug_steps
+                    )
                 except subprocess.CalledProcessError as exc:
                     out_spectro.unlink(missing_ok=True)
                     print(
@@ -618,7 +1039,7 @@ def run_process_pipeline(
             "stems": list(track_manifest["stems"].values()),
             "midi": list(track_manifest["midi"].values()),
             "lyrics": (
-                [track_manifest["transcription"]["txt"]]
+                list(track_manifest["transcription"].values())
                 if track_manifest["transcription"]
                 else []
             ),
@@ -667,6 +1088,19 @@ def main():
         dest="skip_asr",
         help="Pomija transkrypcję ASR/Whisper.",
     )
+    demucs_options = parser.add_mutually_exclusive_group()
+    demucs_options.add_argument(
+        "--skip-demucs",
+        action="store_true",
+        help="Reuses existing complete stems from the output directory instead of running Demucs.",
+    )
+    demucs_options.add_argument(
+        "--only-demucs",
+        "--only-generate-stems",
+        action="store_true",
+        dest="only_demucs",
+        help="Runs Demucs only and skips analysis and all subsequent processing.",
+    )
     parser.add_argument("--model", type=str, default="small", help="Model Whisper (domyślnie: small)")
     parser.add_argument("--json-out", type=Path, help="Ścieżka zapisu zbiorczego raportu JSON")
     parser.add_argument('--spectro','--spectrogram',action='store_true')
@@ -689,7 +1123,10 @@ def main():
     if debug_steps is not None and not debug_steps:
         debug_steps = {"base", "tf", "asr"}
 
-    ensure_venv_interpreters(stage=args.stage, skip_asr=args.skip_asr)
+    ensure_venv_interpreters(
+        stage="base" if args.only_demucs else args.stage,
+        skip_asr=args.skip_asr,
+    )
 
     manifest = run_process_pipeline(
         input_dir=args.input,
@@ -701,6 +1138,8 @@ def main():
         debug_steps=debug_steps,
         stage=args.stage,
         skip_asr=args.skip_asr,
+        skip_demucs=args.skip_demucs,
+        only_demucs=args.only_demucs,
     )
     
     json_output = json.dumps(manifest, ensure_ascii=False, indent=2)

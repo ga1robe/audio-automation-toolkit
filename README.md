@@ -215,6 +215,32 @@ docker run --rm -it \
 
 The default is `6`. If Demucs is terminated by the operating system or exceeds the per-chunk timeout, the toolkit retries with the four-stem `htdemucs` model.
 
+## Large-stem heuristic processing
+
+Drum and bass stems larger than 200 MiB are decoded and processed in five-minute
+chunks to limit memory use. The toolkit applies the chunk start time when it
+merges the generated MIDI files, and removes temporary audio and MIDI chunks
+after processing. Smaller stems continue to use the normal single-process path.
+
+## Long-source audio analysis
+
+Before analyzing a source, the toolkit uses `src/modules/splitter.py` to cut at
+silence gaps of at least three seconds and further caps each analysis chunk at
+five minutes. Each analysis entry includes a `segment` object with the source
+audio's `start_seconds` and `end_seconds`, rather than the temporary chunk
+filename. Adjacent chunks with matching tempo, key, measure, and tonality are
+merged into one entry and their segment range is extended. For a merged entry,
+`bass_estimate.median_hz` is recomputed from the voiced pitch frames of all
+merged chunks; segment medians are not averaged. A single chunk is returned as
+an object, while multiple resulting entries are returned as a list. Temporary
+audio chunks are removed after analysis.
+
+The `full` stage also runs a librosa spectral-novelty pass over the complete
+source mix, including mixes without silence gaps. It records detected change
+timestamps and novelty scores in `<track>/structural_changes.json` and in the
+track's `structural_changes` manifest field. This reports candidate cut points;
+it does not modify or split the source audio.
+
 ## Output
 
 For an input file such as:
@@ -271,12 +297,65 @@ audio_toolkit.py INPUT OUTPUT [OPTIONS]
 
 | Option | Default | Description |
 |---|---:|---|
+| `--stage` | `full` | Pipeline stage: `base`, `tf`, `asr`, or `full` |
 | `--stems` | `6` | Number of stems to request; valid value: `6` |
+| `--skip-demucs` | disabled | Reuse existing stems in the output directory instead of separating again |
+| `--only-demucs`, `--only-generate-stems` | disabled | Generate stems only; skip analysis and all subsequent processing |
 | `--lang` | `en` | Transcription language |
 | `--model` | `small` | ASR model |
 | `--json-out` | none | Path for the consolidated JSON report |
 | `--spectro` | disabled | Generate spectrograms |
 | `--spectrogram` | disabled | Alias for `--spectro` |
+
+To rerun analysis and base-stage processing without separating the source again,
+reuse the complete stem set already present under the track's output directory:
+
+```/bin/bash
+docker run --rm -it \
+  -v "$(pwd)/data:/app/data" \
+  audio-automation-toolkit \
+  /app/data/input_audio \
+  /app/data/output_results \
+  --stage base \
+  --skip-demucs
+```
+
+The existing stems must be a complete 4-stem or 6-stem Demucs set under
+`OUTPUT/<track>/stems/`. The command still runs source analysis and the selected
+stage's remaining processing.
+
+For long tracks, separation and analysis can be run as two separate operations.
+First generate only the stems:
+
+```/bin/bash
+docker run --rm -it \
+  -v "$(pwd)/data:/app/data" \
+  audio-automation-toolkit \
+  /app/data/input_audio \
+  /app/data/output_results \
+  --only-demucs
+```
+
+Then run the desired processing stage using those stems without repeating
+separation:
+
+```/bin/bash
+docker run --rm -it \
+  -v "$(pwd)/data:/app/data" \
+  audio-automation-toolkit \
+  /app/data/input_audio \
+  /app/data/output_results \
+  --skip-demucs
+```
+
+`--only-demucs` and `--skip-demucs` cannot be used together. The former also
+requires only the base runtime environment, regardless of the selected pipeline
+stage.
+
+The `base` stage generates heuristic MIDI for bass and drums, but does not run
+Basic Pitch; its manifest logs this for stems without MIDI. Basic Pitch MIDI is
+generated in the `full` and `tf` stages. Large stems are split into five-minute
+chunks for Basic Pitch conversion, then the MIDI chunks are merged.
 
 To display help:
 
@@ -291,13 +370,15 @@ For each audio file, the toolkit:
 1. Finds supported audio files.
 2. Splits the source into chunks of up to five minutes and separates each with Demucs.
 3. Joins the chunks for each stem into one WAV file without loading the entire result into memory.
-4. Analyzes tempo, key, and tonality.
+4. Splits each source into silence-separated chunks of up to five minutes and
+   analyzes tempo, key, and tonality for each chunk.
 5. Detects the vocal stem.
 6. Transcribes vocals with ASR.
 7. Converts the vocal stem to MIDI.
 8. Converts drums to MIDI using heuristics.
 9. Converts bass to MIDI using heuristics.
-10. Converts the remaining stems to MIDI.
+10. Converts the remaining stems to MIDI with Basic Pitch. Large stems are
+    processed in five-minute chunks, with the MIDI chunks merged afterward.
 11. Optionally generates spectrograms.
 12. Saves the JSON report.
 

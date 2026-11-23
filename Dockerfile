@@ -22,7 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv "$VIRTUAL_ENV"
 COPY requirements/base.all.txt /tmp/requirements/base.all.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
-    python -m pip install --timeout=300 --retries=10 --prefer-binary \
+    python -m pip install --timeout=900 --retries=10 --prefer-binary \
     -r /tmp/requirements/base.all.txt
 
 FROM ${BASE_IMAGE} AS tf-builder
@@ -68,7 +68,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv "$VIRTUAL_ENV"
 COPY requirements/asr.all.txt /tmp/requirements/asr.all.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
-    python -m pip install --timeout=300 --retries=10 --prefer-binary \
+    python -m pip install --timeout=1400 --retries=10 --prefer-binary \
     -r /tmp/requirements/asr.all.txt
 
 FROM ${BASE_IMAGE} AS runtime
