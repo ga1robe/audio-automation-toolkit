@@ -4,12 +4,9 @@ import json
 import argparse
 import numpy as np
 import librosa
-import librosa.display
 #import tkinter as tk
 from pathlib import Path
 from tempfile import TemporaryDirectory
-
-import matplotlib.pyplot as plt
 
 from splitter import split_dj_set_by_silence_with_timestamps
 
@@ -19,11 +16,8 @@ STRUCTURAL_NOVELTY_SMOOTHING_SECONDS = 3.0
 STRUCTURAL_NOVELTY_MIN_GAP_SECONDS = 30.0
 
 
-def _analyze_audio_file(
-    file_path: str,
-    spectrogram_path: str | None = None,
-) -> dict:
-    """Wczytuje plik audio i zwraca podstawowe metadane oraz zapisuje spektrogram."""
+def _analyze_audio_file(file_path: str) -> dict:
+    """Load an audio file and return its basic analysis metadata."""
     y, sr = librosa.load(file_path, sr=None, mono=True)
     
     # tempo
@@ -45,13 +39,6 @@ def _analyze_audio_file(
     ]
     tonality = key_names[key_idx]
     
-    # SPECTROGRAM: zapisz log-mel spectrogram i standardowy spektrogram
-    spec_info = None
-    if spectrogram_path:
-        spectrogram_png = Path(spectrogram_path)
-        spectrogram_png.parent.mkdir(parents=True, exist_ok=True)
-        spec_info = str(spectrogram_png)
-        
     # BASS ESTIMATE: prosty oszacowanie linii basu przez librosa.pyin (fokus niskie freq)
     bass_estimate = None
     voiced_pitches = np.array([], dtype=float)
@@ -78,16 +65,12 @@ def _analyze_audio_file(
         "measure": measure,
         "tonality": tonality,
         "file": str(Path(file_path).name),
-        #"spectrogram_png": spec_info,
         "bass_estimate": bass_estimate,
         "_voiced_pitches": voiced_pitches,
     }
 
 
-def analyze_audio(
-    file_path: str,
-    spectrogram_path: str | None = None,
-) -> dict | list[dict]:
+def analyze_audio(file_path: str) -> dict | list[dict]:
     """Analyze silence-separated, duration-capped chunks of the source audio."""
     source_path = Path(file_path)
     with TemporaryDirectory(prefix="audio-analysis-") as temp_dir:
@@ -96,22 +79,8 @@ def analyze_audio(
         )
         analyses: list[dict] = []
 
-        for index, chunk in enumerate(chunks, start=1):
-            chunk_spectrogram_path = None
-            if spectrogram_path:
-                output_path = Path(spectrogram_path)
-                chunk_spectrogram_path = str(
-                    output_path.with_name(
-                        f"{output_path.stem}.segment_{index:02d}{output_path.suffix}"
-                    )
-                    if len(chunks) > 1
-                    else output_path
-                )
-
-            result = _analyze_audio_file(
-                str(chunk.path),
-                chunk_spectrogram_path,
-            )
+        for chunk in chunks:
+            result = _analyze_audio_file(str(chunk.path))
             result["file"] = source_path.name
             result.setdefault("_voiced_pitches", np.array([], dtype=float))
             result["segment"] = {
@@ -273,12 +242,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Zapisuje wyniki w formacie JSON do podanego pliku.",
     )
     parser.add_argument(
-        "--spectrogram",
-        dest="spectrogram",
-        metavar="PNG",
-        help="Ścieżka do pliku PNG, w którym zostanie zapisany spektrogram (Mel).",
-    )
-    parser.add_argument(
         "--novelty-output",
         metavar="FILE",
         help="Zapisuje wykryte zmiany strukturalne do pliku JSON.",
@@ -293,15 +256,7 @@ def main() -> None:
         parser.print_help()
         sys.exit(0)
         
-    # jeśli nie podano ścieżki spektrogramu, zapisz obok pliku wynikowego JSON (jeśli podany)
-    spectrogram_path = None
-    if args.spectrogram:
-        spectrogram_path = args.spectrogram
-    elif args.output_path:
-        outp = Path(args.output_path)
-        spectrogram_path = str(outp.with_suffix(".spectrogram.png"))
-    
-    results = analyze_audio(args.audio_file, spectrogram_path)
+    results = analyze_audio(args.audio_file)
     if args.novelty_output:
         write_json(
             detect_structural_changes(args.audio_file),
@@ -316,7 +271,6 @@ def main() -> None:
                 f"{label}Tempo: {entry['tempo']} BPM\n"
                 f"Measure: {entry['measure']}\n"
                 f"Tonality: {entry['tonality']}\n"
-                f"Spectrogram: {entry.get('spectrogram_png')}\n"
                 f"Bass estimate: {entry.get('bass_estimate')}"
             )
     
