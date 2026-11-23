@@ -300,6 +300,7 @@ audio_toolkit.py INPUT OUTPUT [OPTIONS]
 | `--stage` | `full` | Pipeline stage: `base`, `tf`, `asr`, or `full` |
 | `--stems` | `6` | Number of stems to request; valid value: `6` |
 | `--skip-demucs` | disabled | Reuse existing stems in the output directory instead of separating again |
+| `--only-demucs`, `--only-generate-stems` | disabled | Generate stems only; skip analysis and all subsequent processing |
 | `--lang` | `en` | Transcription language |
 | `--model` | `small` | ASR model |
 | `--json-out` | none | Path for the consolidated JSON report |
@@ -322,6 +323,34 @@ docker run --rm -it \
 The existing stems must be a complete 4-stem or 6-stem Demucs set under
 `OUTPUT/<track>/stems/`. The command still runs source analysis and the selected
 stage's remaining processing.
+
+For long tracks, separation and analysis can be run as two separate operations.
+First generate only the stems:
+
+```/bin/bash
+docker run --rm -it \
+  -v "$(pwd)/data:/app/data" \
+  audio-automation-toolkit \
+  /app/data/input_audio \
+  /app/data/output_results \
+  --only-demucs
+```
+
+Then run the desired processing stage using those stems without repeating
+separation:
+
+```/bin/bash
+docker run --rm -it \
+  -v "$(pwd)/data:/app/data" \
+  audio-automation-toolkit \
+  /app/data/input_audio \
+  /app/data/output_results \
+  --skip-demucs
+```
+
+`--only-demucs` and `--skip-demucs` cannot be used together. The former also
+requires only the base runtime environment, regardless of the selected pipeline
+stage.
 
 The `base` stage generates heuristic MIDI for bass and drums, but does not run
 Basic Pitch; its manifest logs this for stems without MIDI. Basic Pitch MIDI is
