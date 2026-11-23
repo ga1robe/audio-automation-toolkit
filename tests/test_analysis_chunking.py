@@ -125,10 +125,9 @@ def test_audio_analysis_returns_results_for_each_split_segment(tmp_path):
             chunk.path.touch()
         return chunks
 
-    def fake_analysis(chunk_path, spectrogram_path):
+    def fake_analysis(chunk_path):
         return {
             "tempo": 100.0 if Path(chunk_path).name == "track_01.wav" else 120.0,
-            "spectrogram": spectrogram_path,
             "_voiced_pitches": [],
         }
 
@@ -140,21 +139,16 @@ def test_audio_analysis_returns_results_for_each_split_segment(tmp_path):
         ),
         patch.object(analysis, "_analyze_audio_file", side_effect=fake_analysis),
     ):
-        results = analysis.analyze_audio(
-            str(source_path),
-            str(tmp_path / "analysis.png"),
-        )
+        results = analysis.analyze_audio(str(source_path))
 
     assert results == [
         {
             "tempo": 100.0,
-            "spectrogram": str(tmp_path / "analysis.segment_01.png"),
             "file": "long_mix.wav",
             "segment": {"start_seconds": 0.0, "end_seconds": 1.0},
         },
         {
             "tempo": 120.0,
-            "spectrogram": str(tmp_path / "analysis.segment_02.png"),
             "file": "long_mix.wav",
             "segment": {"start_seconds": 1.0, "end_seconds": 2.0},
         },
@@ -216,7 +210,7 @@ def test_audio_analysis_merges_adjacent_metadata_and_recomputes_bass_median(tmp_
         patch.object(
             analysis,
             "_analyze_audio_file",
-            side_effect=lambda path, _spectrogram: analyses[Path(path).name],
+            side_effect=lambda path: analyses[Path(path).name],
         ),
     ):
         results = analysis.analyze_audio(str(source_path))
