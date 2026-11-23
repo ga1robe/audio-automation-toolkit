@@ -202,6 +202,77 @@ def test_pipeline_reuses_existing_stems_when_demucs_is_skipped(tmp_path):
     ) in skipped_basic_pitch
 
 
+def test_pipeline_can_generate_stems_without_running_later_stages(tmp_path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    (input_dir / "mix.wav").touch()
+
+    def fake_demucs(_audio_path, stems_dir, _stems_count, _debug_steps):
+        track_stems_dir = stems_dir / "mix"
+        track_stems_dir.mkdir(parents=True)
+        (track_stems_dir / "vocals.wav").touch()
+        (track_stems_dir / "drums.wav").touch()
+        return 4
+
+    with (
+        patch.object(
+            audio_toolkit,
+            "get_audio_metadata",
+            return_value={
+                "duration_seconds": 1.0,
+                "sample_rate": 44100,
+                "channels": 2,
+            },
+        ),
+        patch.object(
+            audio_toolkit, "run_demucs_with_fallback", side_effect=fake_demucs
+        ) as run_demucs,
+        patch.object(audio_toolkit.subprocess, "run") as run,
+    ):
+        manifest = audio_toolkit.run_process_pipeline(
+            input_dir,
+            output_dir,
+            stage="full",
+            only_demucs=True,
+        )
+
+    run_demucs.assert_called_once()
+    run.assert_not_called()
+    track_manifest = manifest["results"][0]
+    assert manifest["pipeline_stage"] == "demucs"
+    assert track_manifest["status"] == "success"
+    assert set(track_manifest["stems"]) == {"vocals", "drums"}
+    assert set(track_manifest["outputs"]["stems"]) == {
+        "stems/vocals.wav",
+        "stems/drums.wav",
+    }
+    assert track_manifest["midi"] == {}
+    assert track_manifest["models"]["basic_pitch"]["model"] is None
+    assert track_manifest["models"]["whisper"]["model"] is None
+
+
+def test_only_demucs_and_skip_demucs_are_mutually_exclusive(monkeypatch):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "audio_toolkit.py",
+            "input",
+            "output",
+            "--skip-demucs",
+            "--only-demucs",
+        ],
+    )
+
+    try:
+        audio_toolkit.main()
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("Expected conflicting Demucs options to be rejected.")
+
+
 def test_pipeline_records_analysis_failure_in_manifest(tmp_path):
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
