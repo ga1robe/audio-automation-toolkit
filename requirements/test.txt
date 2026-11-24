@@ -1,0 +1,9 @@
+pytest==8.4.2
+numpy==1.24.3
+soundfile==0.14.0
+pillow==12.3.0
+mido==1.3.3
+pydub==0.25.1
+librosa==0.11.0
+matplotlib==3.10.9
+pretty_midi==0.2.11.post0
