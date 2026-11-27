@@ -5,6 +5,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from typer.testing import CliRunner
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import audio_toolkit
@@ -252,25 +254,47 @@ def test_pipeline_can_generate_stems_without_running_later_stages(tmp_path):
     assert track_manifest["models"]["whisper"]["model"] is None
 
 
-def test_only_demucs_and_skip_demucs_are_mutually_exclusive(monkeypatch):
+def test_run_command_writes_manifest_to_requested_path(tmp_path, monkeypatch):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    json_out = tmp_path / "reports" / "manifest.json"
+    manifest = {"status": "ok"}
+    calls = {}
+
+    monkeypatch.setattr(audio_toolkit, "ensure_venv_interpreters", lambda **kwargs: None)
     monkeypatch.setattr(
-        sys,
-        "argv",
+        audio_toolkit,
+        "run_process_pipeline",
+        lambda **kwargs: calls.update(kwargs) or manifest,
+    )
+
+    result = CliRunner().invoke(
+        audio_toolkit.app,
         [
-            "audio_toolkit.py",
-            "input",
-            "output",
-            "--skip-demucs",
-            "--only-demucs",
+            str(input_dir),
+            str(output_dir),
+            "--no-asr",
+            "--spectrogram",
+            "--json-out",
+            str(json_out),
         ],
     )
 
-    try:
-        audio_toolkit.main()
-    except SystemExit as exc:
-        assert exc.code == 2
-    else:
-        raise AssertionError("Expected conflicting Demucs options to be rejected.")
+    assert result.exit_code == 0, result.output
+    assert json_out.read_text(encoding="utf-8") == '{\n  "status": "ok"\n}'
+    assert calls["input_dir"] == input_dir
+    assert calls["skip_asr"] is True
+    assert calls["spectro_bool"] is True
+
+
+def test_only_demucs_and_skip_demucs_are_mutually_exclusive():
+    result = CliRunner().invoke(
+        audio_toolkit.app,
+        ["input", "output", "--skip-demucs", "--only-demucs"],
+    )
+
+    assert result.exit_code == 2
 
 
 def test_pipeline_records_analysis_failure_in_manifest(tmp_path):
