@@ -4,7 +4,6 @@ Audio Automation Toolkit - Unified CLI
 Zarządza potokiem przetwarzania: Separacja -> Analiza -> Konwersja MIDI / ASR -> JSON Output
 """
 
-import argparse
 import hashlib
 import json
 import os
@@ -18,6 +17,9 @@ import tempfile
 import time
 import wave
 from pathlib import Path
+from typing import List, Optional
+
+import typer
 
 # Definicje ścieżek środowisk wirtualnych wewnątrz kontenera
 PROJECT_DIR = Path(__file__).resolve().parent.parent
@@ -1061,107 +1063,88 @@ def run_process_pipeline(
     )
     return execution_manifest
 
-def main():
-    parser = argparse.ArgumentParser(
-        prog="audio-toolkit",
-        description="Automatyczny potok zamiany Audio do MIDI, separacji stemów i ASR."
-    )
-    parser.add_argument("input", type=Path, help="Katalog wejściowy z plikami audio")
-    parser.add_argument("output", type=Path, help="Katalog wyjściowy na pliki MIDI, JSON, ASR")
-    parser.add_argument(
-        "--stage",
-        choices=["base", "tf", "asr", "full"],
-        default="full",
-        help="Wybiera, który etap ma zostać uruchomiony: base, tf, asr lub full."
-    )
-    parser.add_argument(
-        "--stems",
-        type=int,
-        default=6,
-        choices=[6],
-        help="Number of stems to separate (6; uses htdemucs_6s by default).",
-    )
-    parser.add_argument("--lang", type=str, default="en", help="Język transkrypcji ASR (domyślnie: en)")
-    parser.add_argument(
-        "--no-asr", "--no-whisper", "--no-whisper-ai",
-        action="store_true",
-        dest="skip_asr",
+app = typer.Typer(
+    name="audio-toolkit",
+    help="Automatyczny potok separacji stemów, analizy, MIDI, ASR i spektrogramów.",
+    add_completion=False,
+)
+
+
+@app.command()
+def run(
+    input_dir: Path = typer.Argument(..., help="Katalog wejściowy z plikami audio"),
+    output_dir: Path = typer.Argument(..., help="Katalog wyjściowy na wyniki"),
+    stage: str = typer.Option("full", help="Etap: base, tf, asr lub full"),
+    stems: int = typer.Option(6, help="Liczba stemów (domyślnie: 6)"),
+    lang: str = typer.Option("en", help="Język transkrypcji ASR (domyślnie: en)"),
+    model: str = typer.Option("small", help="Model Whisper (domyślnie: small)"),
+    skip_asr: bool = typer.Option(
+        False,
+        "--no-asr",
+        "--no-whisper",
+        "--no-whisper-ai",
         help="Pomija transkrypcję ASR/Whisper.",
-    )
-    demucs_options = parser.add_mutually_exclusive_group()
-    demucs_options.add_argument(
-        "--skip-demucs",
-        action="store_true",
-        help="Reuses existing complete stems from the output directory instead of running Demucs.",
-    )
-    demucs_options.add_argument(
+    ),
+    skip_demucs: bool = typer.Option(
+        False, "--skip-demucs", help="Używa istniejących stemów"
+    ),
+    spectro: bool = typer.Option(
+        False, "--spectro", "--spectrogram", help="Generuje spektrogramy"
+    ),
+    json_out: Optional[Path] = typer.Option(
+        None, "--json-out", help="Ścieżka raportu JSON"
+    ),
+    only_demucs: bool = typer.Option(
+        False,
         "--only-demucs",
         "--only-generate-stems",
-        action="store_true",
-        dest="only_demucs",
-        help="Runs Demucs only and skips analysis and all subsequent processing.",
-    )
-    parser.add_argument("--model", type=str, default="small", help="Model Whisper (domyślnie: small)")
-    parser.add_argument("--json-out", type=Path, help="Ścieżka zapisu zbiorczego raportu JSON")
-    parser.add_argument('--spectro','--spectrogram',action='store_true')
-    parser.add_argument(
+        help="Generuje wyłącznie stemy, pomijając kolejne etapy.",
+    ),
+    debug_steps: Optional[List[str]] = typer.Option(
+        None,
         "--debug-steps",
-        nargs="*",
-        choices=["base", "tf", "asr"],
-        help="Włącza logowanie komend dla wybranych etapów: base, tf, asr. Bez wartości włącza wszystkie etapy."
-    )
-    parser.add_argument(
-        "--debug",
-        action="store_const",
-        const=["base", "tf", "asr"],
-        dest="debug_steps",
-        help="Skrót do --debug-steps base tf asr."
-    )
-    
-    args = parser.parse_args()
-    debug_steps = set(args.debug_steps) if args.debug_steps is not None else None
-    if debug_steps is not None and not debug_steps:
-        debug_steps = {"base", "tf", "asr"}
+        help="Włącza logowanie komend dla wybranych etapów: base, tf, asr.",
+    ),
+    debug: bool = typer.Option(
+        False, "--debug", help="Włącza logowanie komend dla wszystkich etapów."
+    ),
+) -> None:
+    """Uruchamia potok przetwarzania audio."""
+    if skip_demucs and only_demucs:
+        raise typer.BadParameter(
+            "--skip-demucs and --only-demucs cannot both be enabled."
+        )
+
+    debug_steps_set = set(debug_steps) if debug_steps is not None else None
+    if debug and debug_steps_set is None:
+        debug_steps_set = {"base", "tf", "asr"}
 
     ensure_venv_interpreters(
-        stage="base" if args.only_demucs else args.stage,
-        skip_asr=args.skip_asr,
+        stage="base" if only_demucs else stage,
+        skip_asr=skip_asr,
+    )
+    manifest = run_process_pipeline(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        stems_count=stems,
+        asr_language=lang,
+        asr_model=model,
+        spectro_bool=spectro,
+        debug_steps=debug_steps_set,
+        stage=stage,
+        skip_asr=skip_asr,
+        skip_demucs=skip_demucs,
+        only_demucs=only_demucs,
     )
 
-    manifest = run_process_pipeline(
-        input_dir=args.input,
-        output_dir=args.output,
-        stems_count=args.stems,
-        asr_language=args.lang,
-        asr_model=args.model,
-        spectro_bool=args.spectro,
-        debug_steps=debug_steps,
-        stage=args.stage,
-        skip_asr=args.skip_asr,
-        skip_demucs=args.skip_demucs,
-        only_demucs=args.only_demucs,
+    target_json = json_out or (output_dir.resolve() / "manifest.json")
+    target_json.parent.mkdir(parents=True, exist_ok=True)
+    target_json.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
     )
-    
-    json_output = json.dumps(manifest, ensure_ascii=False, indent=2)
-    local_analysis_json_paths = [
-            str(args.output.resolve() / path.stem / "analysis.json") for path in args.input.resolve().iterdir() if path.is_file() and path.suffix.lower() in [".wav", ".mp3", ".flac", ".m4a", ".ogg"]
-        ]
-    if args.json_out:
-        args.json_out.parent.mkdir(parents=True, exist_ok=True)
-        if not os.path.normpath(args.json_out) in (os.path.normpath(path) for path in local_analysis_json_paths):
-            with open(args.json_out, "w", encoding="utf-8") as f:
-                f.write(json_output)
-        else:
-            actual_json_out = str(args.output.resolve() / "analysis.json")
-            with open(actual_json_out, "w", encoding="utf-8") as f:
-                f.write(json_output)
-    else:
-        json_output_path = args.output.resolve() / "manifest.json"
-        with open(json_output_path, "w", encoding="utf-8") as f:
-            f.write(json_output)
-            
-    # Standardowe wyjście JSON dla integracji z innymi systemami
-    print(json_output)
-    
+    typer.secho(f"Zapisano manifest: {target_json}", fg=typer.colors.GREEN)
+
+
 if __name__ == "__main__":
-    main()
+    app()
